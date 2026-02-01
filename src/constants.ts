@@ -1,0 +1,116 @@
+/**
+ * CH347 USB Constants and Protocol Definitions
+ */
+
+// USB Vendor and Product IDs
+export const CH347_VID = 0x1a86;
+export const CH347_PID_SPI_I2C_UART = 0x55db; // Mode 1: SPI + I2C + UART
+export const CH347_PID_JTAG_I2C_UART = 0x55dd; // Mode 3: JTAG + I2C + UART
+
+// USB Endpoints (Mode 1 - SPI/I2C/GPIO interface is on interface 2)
+export const CH347_EP_OUT = 0x06;
+export const CH347_EP_IN = 0x86;
+export const CH347_IFACE_SPI_I2C_GPIO = 2;
+export const CH347_IFACE_UART = 0; // UART is typically on interface 0
+
+// USB Transfer Constants
+export const CH347_PACKET_SIZE = 512;
+export const CH347_MAX_PAYLOAD = 507; // 512 - 3 (cmd + length) - 2 (padding)
+export const CH347_TIMEOUT_MS = 1000;
+
+// GPIO Commands
+export const CH347_CMD_GPIO = 0xcc;
+export const CH347_GPIO_COUNT = 8;
+
+// GPIO Pin Bit Masks (for gpio_obuf[3 + pin])
+export const GPIO_PIN_ENABLE = 0xc0;    // Enable pin change
+export const GPIO_PIN_DIR_OUT = 0x30;   // Set direction to output
+export const GPIO_PIN_VALUE_HIGH = 0x08; // Set value high
+
+// GPIO Response Bit Masks (for gpio_ibuf[3 + pin])
+export const GPIO_PIN_IS_OUTPUT = 0x80; // Direction is output
+export const GPIO_PIN_VALUE = 0x40;     // Current value
+
+// I2C Commands
+export const CH347_CMD_I2C_STREAM = 0xaa;
+export const CH347_CMD_I2C_STM_END = 0x00;
+export const CH347_CMD_I2C_STM_STA = 0x74; // Start condition
+export const CH347_CMD_I2C_STM_STO = 0x75; // Stop condition
+export const CH347_CMD_I2C_STM_OUT = 0x80; // Output data (| length)
+export const CH347_CMD_I2C_STM_IN = 0xc0;  // Input data (| length)
+export const CH347_CMD_I2C_STM_SET = 0x60; // Set speed (| speed)
+
+// I2C Speed modes
+export enum I2CSpeed {
+  LOW = 0,      // 20kHz
+  STANDARD = 1, // 100kHz
+  FAST = 2,     // 400kHz
+  HIGH = 3,     // 750kHz
+}
+
+// SPI Commands (from flashrom ch347_spi.c)
+export const CH347_CMD_SPI_SET_CFG = 0xc0;
+export const CH347_CMD_SPI_CS_CTRL = 0xc1;
+export const CH347_CMD_SPI_OUT_IN = 0xc2;
+export const CH347_CMD_SPI_IN = 0xc3;
+export const CH347_CMD_SPI_OUT = 0xc4;
+export const CH347_CMD_SPI_GET_CFG = 0xca;
+
+// SPI Chip Select Control
+export const CH347_CS_ASSERT = 0x00;
+export const CH347_CS_DEASSERT = 0x40;
+export const CH347_CS_CHANGE = 0x80;
+export const CH347_CS_IGNORE = 0x00;
+
+// SPI Clock Speeds (divisor values)
+export enum SPISpeed {
+  CLK_60M = 0,
+  CLK_30M = 1,
+  CLK_15M = 2,
+  CLK_7_5M = 3,
+  CLK_3_75M = 4,
+  CLK_1_875M = 5,
+  CLK_937_5K = 6,
+  CLK_468_75K = 7,
+}
+
+// SPI Modes
+export enum SPIMode {
+  MODE_0 = 0, // CPOL=0, CPHA=0
+  MODE_1 = 1, // CPOL=0, CPHA=1
+  MODE_2 = 2, // CPOL=1, CPHA=0
+  MODE_3 = 3, // CPOL=1, CPHA=1
+}
+
+// SPI Flash Commands (common JEDEC commands)
+export const FLASH_CMD_WRITE_ENABLE = 0x06;
+export const FLASH_CMD_WRITE_DISABLE = 0x04;
+export const FLASH_CMD_READ_STATUS = 0x05;
+export const FLASH_CMD_WRITE_STATUS = 0x01;
+export const FLASH_CMD_READ_DATA = 0x03;
+export const FLASH_CMD_FAST_READ = 0x0b;
+export const FLASH_CMD_PAGE_PROGRAM = 0x02;
+export const FLASH_CMD_SECTOR_ERASE = 0x20;    // 4KB
+export const FLASH_CMD_BLOCK_ERASE_32K = 0x52; // 32KB
+export const FLASH_CMD_BLOCK_ERASE_64K = 0xd8; // 64KB
+export const FLASH_CMD_CHIP_ERASE = 0xc7;
+export const FLASH_CMD_READ_ID = 0x9f;
+export const FLASH_CMD_READ_JEDEC_ID = 0x9f;
+export const FLASH_CMD_POWER_DOWN = 0xb9;
+export const FLASH_CMD_RELEASE_POWER_DOWN = 0xab;
+export const FLASH_CMD_READ_SFDP = 0x5a;         // Read SFDP (Serial Flash Discoverable Parameters)
+
+// Flash Status Register Bits
+export const FLASH_STATUS_WIP = 0x01;  // Write In Progress
+export const FLASH_STATUS_WEL = 0x02;  // Write Enable Latch
+
+// Flash Constants
+export const FLASH_PAGE_SIZE = 256;
+export const FLASH_SECTOR_SIZE = 4096;
+export const FLASH_BLOCK_SIZE_32K = 32768;
+export const FLASH_BLOCK_SIZE_64K = 65536;
+
+// UART interface - uses CDC ACM protocol via serial port
+// The CH347 UART appears as a virtual COM port
+export const CH347_UART_DEFAULT_BAUD = 115200;
+
