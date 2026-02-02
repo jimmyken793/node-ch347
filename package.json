@@ -1,6 +1,6 @@
 {
   "name": "node-ch347",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Node.js library for CH347 USB interface - GPIO, SPI flash programming, and UART",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
