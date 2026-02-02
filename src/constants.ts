@@ -14,9 +14,12 @@ export const CH347_IFACE_SPI_I2C_GPIO = 2;
 export const CH347_IFACE_UART = 0; // UART is typically on interface 0
 
 // USB Transfer Constants
-export const CH347_PACKET_SIZE = 512;
-export const CH347_MAX_PAYLOAD = 507; // 512 - 3 (cmd + length) - 2 (padding)
-export const CH347_TIMEOUT_MS = 1000;
+// The USB descriptor says the max transfer size is 512 bytes, but the
+// vendor driver only seems to transfer a maximum of 510 bytes at once,
+// leaving 507 bytes for data as the command + length take up 3 bytes
+export const CH347_PACKET_SIZE = 510;
+export const CH347_MAX_DATA_LEN = 507; // CH347_PACKET_SIZE - 3
+export const CH347_TIMEOUT_MS = 30000; // 30 seconds for flash operations
 
 // GPIO Commands
 export const CH347_CMD_GPIO = 0xcc;

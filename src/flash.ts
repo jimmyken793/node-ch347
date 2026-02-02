@@ -32,6 +32,7 @@ import {
   FlashManufacturers,
   FlashDatabase,
 } from './types';
+import { on } from 'events';
 
 const DEFAULT_TIMEOUT_MS = 30000; // 30 seconds for chip erase
 const POLL_INTERVAL_MS = 1; // 1ms polling
@@ -48,12 +49,13 @@ export class CH347Flash {
    * Read JEDEC ID from flash chip
    */
   async readJedecId(): Promise<FlashInfo> {
-    const cmd = Buffer.from([FLASH_CMD_READ_JEDEC_ID, 0, 0, 0]);
-    const response = await this.spi.transfer(cmd);
+    // Send JEDEC ID command (1 byte), read 3 bytes response
+    const cmd = Buffer.from([FLASH_CMD_READ_JEDEC_ID]);
+    const response = await this.spi.sendCommand(cmd, 3);
 
-    const manufacturerId = response[1];
-    const memoryType = response[2];
-    const capacity = response[3];
+    const manufacturerId = response[0];
+    const memoryType = response[1];
+    const capacity = response[2];
     const jedecId = (manufacturerId << 16) | (memoryType << 8) | capacity;
 
     // Look up in database
@@ -83,8 +85,8 @@ export class CH347Flash {
       name,
     };
 
-    // Try to read SFDP parameters
-    await this.readSFDPBasicParams();
+    // Try to read SFDP parameters (disabled for now - may cause device state issues)
+    // await this.readSFDPBasicParams();
 
     return this.flashInfo;
   }
@@ -95,16 +97,16 @@ export class CH347Flash {
    * @param length Number of bytes to read
    */
   async readSFDP(address: number, length: number): Promise<Buffer> {
-    // Command: 0x5A + 24-bit address + 1 dummy byte + read data
-    const cmd = Buffer.alloc(5 + length);
-    cmd[0] = FLASH_CMD_READ_SFDP;
-    cmd[1] = (address >> 16) & 0xff;
-    cmd[2] = (address >> 8) & 0xff;
-    cmd[3] = address & 0xff;
-    cmd[4] = 0x00; // dummy byte
+    // Command: 0x5A + 24-bit address + 1 dummy byte, then read data
+    const cmd = Buffer.from([
+      FLASH_CMD_READ_SFDP,
+      (address >> 16) & 0xff,
+      (address >> 8) & 0xff,
+      address & 0xff,
+      0x00, // dummy byte
+    ]);
 
-    const response = await this.spi.transfer(cmd);
-    return response.subarray(5);
+    return this.spi.sendCommand(cmd, length);
   }
 
   /**
@@ -187,9 +189,9 @@ export class CH347Flash {
    * Read status register
    */
   async readStatus(): Promise<number> {
-    const cmd = Buffer.from([FLASH_CMD_READ_STATUS, 0]);
-    const response = await this.spi.transfer(cmd);
-    return response[1];
+    const cmd = Buffer.from([FLASH_CMD_READ_STATUS]);
+    const response = await this.spi.sendCommand(cmd, 1);
+    return response[0];
   }
 
   /**
@@ -248,15 +250,16 @@ export class CH347Flash {
       const readLen = Math.min(chunkSize, length - offset);
       const addr = address + offset;
 
-      // Build read command
-      const cmd = Buffer.alloc(4 + readLen);
-      cmd[0] = FLASH_CMD_READ_DATA;
-      cmd[1] = (addr >> 16) & 0xff;
-      cmd[2] = (addr >> 8) & 0xff;
-      cmd[3] = addr & 0xff;
+      // Build read command: 0x03 + 24-bit address
+      const cmd = Buffer.from([
+        FLASH_CMD_READ_DATA,
+        (addr >> 16) & 0xff,
+        (addr >> 8) & 0xff,
+        addr & 0xff,
+      ]);
 
-      const response = await this.spi.transfer(cmd);
-      response.copy(result, offset, 4, 4 + readLen);
+      const response = await this.spi.sendCommand(cmd, readLen);
+      response.copy(result, offset);
 
       offset += readLen;
 
@@ -572,8 +575,10 @@ export class CH347Flash {
   ): Promise<boolean> {
     const { erase = true, verify = true, onProgress } = options;
 
+    console.log("Reading original content...");
     // Read original content to compare
-    const original = await this.read(address, data.length);
+    const original = await this.read(address, data.length, onProgress);
+    console.log("");
 
     // Analyze which sectors need erasing and which need writing
     const sectorsToErase: number[] = [];

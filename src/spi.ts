@@ -1,7 +1,7 @@
 /**
  * CH347 SPI Interface
  *
- * Protocol based on official WCH SDK and flashrom implementation.
+ * Protocol based on flashrom ch347_spi.c implementation.
  * Commands:
  *   0xC0 - SPI_SET_CFG: Configure SPI
  *   0xC1 - SPI_CS_CTRL: Chip select control
@@ -18,10 +18,10 @@ import {
   CH347_CMD_SPI_OUT_IN,
   CH347_CMD_SPI_IN,
   CH347_CMD_SPI_OUT,
-  CH347_CMD_SPI_GET_CFG,
   CH347_CS_ASSERT,
   CH347_CS_DEASSERT,
   CH347_CS_CHANGE,
+  CH347_CS_IGNORE,
   CH347_PACKET_SIZE,
   SPISpeed,
   SPIMode,
@@ -48,100 +48,221 @@ export class CH347SPI {
 
   /**
    * Initialize SPI interface with configuration
+   * Configuration packet structure based on flashrom ch347_spi.c
    */
   async init(config?: Partial<SPIConfig>): Promise<void> {
     if (config) {
       this.config = { ...this.config, ...config };
     }
 
-    // Build SPI configuration packet (29 bytes total)
-    const cfgBuf = Buffer.alloc(29);
-    cfgBuf[0] = this.config.mode; // SPI Mode 0/1/2/3
-    cfgBuf[1] = this.config.speed; // Clock divisor
-    cfgBuf[2] = this.config.bitOrder === 'LSB' ? 0 : 1; // Byte order: 0=LSB, 1=MSB
-    cfgBuf[3] = 0; // SpiWriteReadInterval low byte
-    cfgBuf[4] = 0; // SpiWriteReadInterval high byte
-    cfgBuf[5] = 0xff; // SpiOutDefaultData
-    cfgBuf[6] = (this.config.chipSelect === 0 ? 0x80 : 0x81); // ChipSelect: bit7=1 means valid, bit0=CS selection
-    cfgBuf[7] = 0; // CS1 polarity (0=active low)
-    cfgBuf[8] = 0; // CS2 polarity (0=active low)
-    cfgBuf[9] = 0; // IsAutoDeactiveCS low byte
-    cfgBuf[10] = 0; // IsAutoDeactiveCS high byte
-    cfgBuf[11] = 0; // ActiveDelay low byte
-    cfgBuf[12] = 0; // ActiveDelay high byte
-    cfgBuf[13] = 0; // DelayDeactive byte 0
-    cfgBuf[14] = 0; // DelayDeactive byte 1
-    cfgBuf[15] = 0; // DelayDeactive byte 2
-    cfgBuf[16] = 0; // DelayDeactive byte 3
+    // Extract clock polarity and phase from SPI mode
+    const cpol = (this.config.mode >> 1) & 1; // bit 1 = CPOL
+    const cpha = this.config.mode & 1;        // bit 0 = CPHA
 
-    // Build command packet
-    const cmdLen = 3 + cfgBuf.length;
-    const cmdBuf = Buffer.alloc(cmdLen);
-    cmdBuf[0] = CH347_CMD_SPI_SET_CFG;
-    cmdBuf[1] = cfgBuf.length & 0xff; // Length low byte
-    cmdBuf[2] = (cfgBuf.length >> 8) & 0xff; // Length high byte
-    cfgBuf.copy(cmdBuf, 3);
+    // Build SPI configuration packet (29 bytes total, matching flashrom)
+    // Structure based on analysis of from vendor driver
+    const buff = Buffer.alloc(29);
+    buff[0] = CH347_CMD_SPI_SET_CFG;
+    buff[1] = (buff.length - 3) & 0xff;         // payload length low byte (26)
+    buff[2] = ((buff.length - 3) >> 8) & 0xff;  // payload length high byte (0)
 
-    await this.usb.write(cmdBuf);
-    const response = await this.usb.read(4);
+    // Mystery bytes that vendor drivers unconditionally set
+    buff[5] = 4;
+    buff[6] = 1;
 
-    // Check response
-    if (response[0] !== CH347_CMD_SPI_SET_CFG || response[3] !== 0) {
-      throw new Error('Failed to configure SPI');
+    // Clock polarity: bit 1
+    buff[9] = cpol;
+
+    // Clock phase: bit 0
+    buff[11] = cpha;
+
+    // Another mystery byte
+    buff[14] = 2;
+
+    // Clock divisor: bits 5:3
+    buff[15] = (this.config.speed & 0x7) << 3;
+
+    // Bit order: bit 7, 0=MSB, 0x80=LSB
+    buff[17] = this.config.bitOrder === 'LSB' ? 0x80 : 0;
+
+    // Yet another mystery byte
+    buff[19] = 7;
+
+    // CS polarity: bit 7 = CS2, bit 6 = CS1. 0 = active low
+    buff[24] = 0;
+
+    await this.usb.write(buff);
+
+    // Read response (flashrom reads into same size buffer)
+    const response = await this.usb.read(29);
+
+    // FIXME: Not sure if the CH347 sends error responses for
+    // invalid config data, if so the code should check
+    if (response.length < 3) {
+      throw new Error('Failed to configure SPI: invalid response');
     }
 
     this.isInitialized = true;
   }
 
   /**
-   * Control chip select
+   * Control chip select (dual CS support like flashrom)
+   * @param cs1 CS1 control flags (CH347_CS_ASSERT/DEASSERT | CH347_CS_CHANGE)
+   * @param cs2 CS2 control flags (CH347_CS_IGNORE or CH347_CS_ASSERT/DEASSERT | CH347_CS_CHANGE)
+   */
+  async csControl(cs1: number, cs2: number = CH347_CS_IGNORE): Promise<void> {
+    // 13-byte CS control command (matching flashrom)
+    const cmd = Buffer.alloc(13);
+    cmd[0] = CH347_CMD_SPI_CS_CTRL;
+    cmd[1] = 10;  // payload length (uint16 LSB)
+    cmd[2] = 0;   // payload length high byte
+    cmd[3] = cs1;
+    cmd[8] = cs2;
+
+    await this.usb.write(cmd);
+  }
+
+  /**
+   * Control chip select (simplified interface)
+   * @param active true to assert CS, false to deassert
    */
   async setChipSelect(active: boolean): Promise<void> {
-    const cmdBuf = Buffer.alloc(4);
-    cmdBuf[0] = CH347_CMD_SPI_CS_CTRL;
-    cmdBuf[1] = 1; // Length
-    cmdBuf[2] = 0;
-    cmdBuf[3] = CH347_CS_CHANGE | (active ? CH347_CS_ASSERT : CH347_CS_DEASSERT);
+    const cs1 = (active ? CH347_CS_ASSERT : CH347_CS_DEASSERT) | CH347_CS_CHANGE;
+    await this.csControl(cs1, CH347_CS_IGNORE);
+  }
 
-    await this.usb.write(cmdBuf);
-    await this.usb.read(4);
+  /**
+   * SPI write only (matching flashrom ch347_write)
+   * @param data Data to write
+   */
+  async write(data: Buffer): Promise<void> {
+    if (!this.isInitialized) {
+      await this.init();
+    }
+
+    // Dynamically adapt chunk size based on USB speed (High-Speed vs Full-Speed)
+    const maxDataLen = this.usb.getMaxDataLen();
+    let bytesWritten = 0;
+
+    while (bytesWritten < data.length) {
+      const dataLen = Math.min(maxDataLen, data.length - bytesWritten);
+      const packetLen = dataLen + 3;
+
+      const buffer = Buffer.alloc(packetLen);
+      buffer[0] = CH347_CMD_SPI_OUT;
+      buffer[1] = dataLen & 0xff;
+      buffer[2] = (dataLen >> 8) & 0xff;
+      data.copy(buffer, 3, bytesWritten, bytesWritten + dataLen);
+
+      await this.usb.write(buffer);
+
+      // Read acknowledgment
+      const resp = await this.usb.read(4);
+      if (resp.length < 4) {
+        throw new Error('Could not receive write command response');
+      }
+
+      bytesWritten += dataLen;
+    }
+  }
+
+  /**
+   * SPI read only (matching flashrom ch347_read)
+   * @param length Number of bytes to read
+   * @returns Data read
+   */
+  async read(length: number): Promise<Buffer> {
+    const debug = process.env.DEBUG_SPI === '1';
+    if (!this.isInitialized) {
+      await this.init();
+    }
+
+    const result = Buffer.alloc(length);
+    let bytesRead = 0;
+
+    // Dynamically adapt chunk size based on USB speed (High-Speed vs Full-Speed)
+    const maxChunkSize = this.usb.getMaxDataLen();
+
+    while (bytesRead < length) {
+      const chunkLen = Math.min(maxChunkSize, length - bytesRead);
+
+      // Send read command for this chunk
+      const commandBuf = Buffer.alloc(7);
+      commandBuf[0] = CH347_CMD_SPI_IN;
+      commandBuf[1] = 4;  // length of parameters
+      commandBuf[2] = 0;
+      commandBuf[3] = chunkLen & 0xff;
+      commandBuf[4] = (chunkLen >> 8) & 0xff;
+      commandBuf[5] = (chunkLen >> 16) & 0xff;
+      commandBuf[6] = (chunkLen >> 24) & 0xff;
+
+      if (debug) console.log(`[SPI.read] Requesting ${chunkLen} bytes (${bytesRead}/${length})...`);
+      await this.usb.write(commandBuf);
+
+      // Read response
+      const response = await this.usb.read(CH347_PACKET_SIZE);
+      if (debug) console.log(`[SPI.read] Got ${response.length} bytes`);
+
+      // Response: u8 command, u16 data length, then the data that was read
+      if (response.length < 3) {
+        throw new Error('CH347 returned an invalid response to read command');
+      }
+
+      const ch347DataLength = response[1] | (response[2] << 8);
+      if (response.length - 3 < ch347DataLength) {
+        throw new Error('CH347 returned less data than data length header indicates');
+      }
+
+      if (ch347DataLength > chunkLen) {
+        throw new Error('CH347 returned more bytes than requested');
+      }
+
+      response.copy(result, bytesRead, 3, 3 + ch347DataLength);
+      bytesRead += ch347DataLength;
+    }
+
+    return result;
   }
 
   /**
    * SPI write and read (full duplex transfer)
+   * Note: This is not used by flashrom but kept for compatibility
    * @param data Data to write
-   * @param csControl If true, automatically control CS (default true)
    * @returns Data read during transfer
    */
-  async writeRead(data: Buffer, csControl = true): Promise<Buffer> {
+  async writeRead(data: Buffer): Promise<Buffer> {
     if (!this.isInitialized) {
       await this.init();
     }
 
     const result = Buffer.alloc(data.length);
     let offset = 0;
-    const maxPayload = CH347_PACKET_SIZE - 3; // Command header is 3 bytes
-
-    // Control CS
-    const csFlag = csControl ? 0x80 : 0x00;
+    const maxDataLen = this.usb.getMaxDataLen();
 
     while (offset < data.length) {
-      const chunkSize = Math.min(data.length - offset, maxPayload);
+      const chunkSize = Math.min(data.length - offset, maxDataLen);
       const chunk = data.subarray(offset, offset + chunkSize);
 
       // Build command packet
       const cmdBuf = Buffer.alloc(3 + chunkSize);
       cmdBuf[0] = CH347_CMD_SPI_OUT_IN;
       cmdBuf[1] = chunkSize & 0xff;
-      cmdBuf[2] = ((chunkSize >> 8) & 0xff) | csFlag;
+      cmdBuf[2] = (chunkSize >> 8) & 0xff;
       chunk.copy(cmdBuf, 3);
 
       await this.usb.write(cmdBuf);
       const response = await this.usb.read(CH347_PACKET_SIZE);
 
-      // Extract data from response
+      // Validate response
+      if (response.length < 3) {
+        throw new Error('CH347 returned an invalid response to writeRead command');
+      }
+
       if (response[0] === CH347_CMD_SPI_OUT_IN) {
         const responseLen = response[1] | (response[2] << 8);
+        if (response.length - 3 < responseLen) {
+          throw new Error('CH347 returned less data than data length header indicates');
+        }
         response.copy(result, offset, 3, 3 + Math.min(responseLen, chunkSize));
       }
 
@@ -152,98 +273,52 @@ export class CH347SPI {
   }
 
   /**
-   * SPI write only
-   * @param data Data to write
-   * @param csControl If true, automatically control CS (default true)
+   * Execute SPI command (matching flashrom ch347_spi_send_command)
+   * This is the main interface for flash operations
+   * @param writeData Data to write (command + address + data)
+   * @param readLength Number of bytes to read after write
+   * @returns Data read (empty buffer if readLength is 0)
    */
-  async write(data: Buffer, csControl = true): Promise<void> {
-    if (!this.isInitialized) {
-      await this.init();
-    }
+  async sendCommand(writeData: Buffer, readLength = 0): Promise<Buffer> {
+    const debug = process.env.DEBUG_SPI === '1';
+    if (debug) console.log(`[SPI] sendCommand: write ${writeData.length} bytes, read ${readLength} bytes`);
 
-    const maxPayload = CH347_PACKET_SIZE - 3;
-    const csFlag = csControl ? 0x80 : 0x00;
-    let offset = 0;
-
-    while (offset < data.length) {
-      const chunkSize = Math.min(data.length - offset, maxPayload);
-      const chunk = data.subarray(offset, offset + chunkSize);
-
-      const cmdBuf = Buffer.alloc(3 + chunkSize);
-      cmdBuf[0] = CH347_CMD_SPI_OUT;
-      cmdBuf[1] = chunkSize & 0xff;
-      cmdBuf[2] = ((chunkSize >> 8) & 0xff) | csFlag;
-      chunk.copy(cmdBuf, 3);
-
-      await this.usb.write(cmdBuf);
-      await this.usb.read(4); // Read acknowledgment
-
-      offset += chunkSize;
-    }
-  }
-
-  /**
-   * SPI read only
-   * @param length Number of bytes to read
-   * @param csControl If true, automatically control CS (default true)
-   * @returns Data read
-   */
-  async read(length: number, csControl = true): Promise<Buffer> {
-    if (!this.isInitialized) {
-      await this.init();
-    }
-
-    const result = Buffer.alloc(length);
-    const maxPayload = CH347_PACKET_SIZE - 3;
-    const csFlag = csControl ? 0x80 : 0x00;
-    let offset = 0;
-
-    while (offset < length) {
-      const chunkSize = Math.min(length - offset, maxPayload);
-
-      const cmdBuf = Buffer.alloc(7);
-      cmdBuf[0] = CH347_CMD_SPI_IN;
-      cmdBuf[1] = 4; // Length of parameters
-      cmdBuf[2] = csFlag;
-      cmdBuf[3] = chunkSize & 0xff;
-      cmdBuf[4] = (chunkSize >> 8) & 0xff;
-      cmdBuf[5] = (chunkSize >> 16) & 0xff;
-      cmdBuf[6] = (chunkSize >> 24) & 0xff;
-
-      await this.usb.write(cmdBuf);
-      const response = await this.usb.read(CH347_PACKET_SIZE);
-
-      if (response[0] === CH347_CMD_SPI_IN) {
-        const responseLen = response[1] | (response[2] << 8);
-        response.copy(result, offset, 3, 3 + Math.min(responseLen, chunkSize));
-      }
-
-      offset += chunkSize;
-    }
-
-    return result;
-  }
-
-  /**
-   * Execute SPI command with CS control
-   * Useful for sending flash commands
-   */
-  async command(writeData: Buffer, readLength = 0): Promise<Buffer> {
-    await this.setChipSelect(true);
+    // Assert CS
+    if (debug) console.log('[SPI] Asserting CS...');
+    await this.csControl(CH347_CS_ASSERT | CH347_CS_CHANGE, CH347_CS_IGNORE);
+    if (debug) console.log('[SPI] CS asserted');
 
     try {
-      if (readLength === 0) {
-        // Write only
-        await this.write(writeData, false);
-        return Buffer.alloc(0);
-      } else {
-        // Write then read
-        await this.write(writeData, false);
-        return await this.read(readLength, false);
+      // Write phase
+      if (writeData.length > 0) {
+        if (debug) console.log(`[SPI] Writing ${writeData.length} bytes...`);
+        await this.write(writeData);
+        if (debug) console.log('[SPI] Write complete');
       }
+
+      // Read phase
+      if (readLength > 0) {
+        if (debug) console.log(`[SPI] Reading ${readLength} bytes...`);
+        const result = await this.read(readLength);
+        if (debug) console.log('[SPI] Read complete');
+        return result;
+      }
+
+      return Buffer.alloc(0);
     } finally {
-      await this.setChipSelect(false);
+      // Deassert CS
+      if (debug) console.log('[SPI] Deasserting CS...');
+      await this.csControl(CH347_CS_DEASSERT | CH347_CS_CHANGE, CH347_CS_IGNORE);
+      if (debug) console.log('[SPI] CS deasserted');
     }
+  }
+
+  /**
+   * Legacy command interface (for backwards compatibility)
+   * @deprecated Use sendCommand instead
+   */
+  async command(writeData: Buffer, readLength = 0): Promise<Buffer> {
+    return this.sendCommand(writeData, readLength);
   }
 
   /**
@@ -252,7 +327,7 @@ export class CH347SPI {
   async transfer(data: Buffer): Promise<Buffer> {
     await this.setChipSelect(true);
     try {
-      return await this.writeRead(data, false);
+      return await this.writeRead(data);
     } finally {
       await this.setChipSelect(false);
     }

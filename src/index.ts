@@ -39,6 +39,7 @@ import {
   CH347DeviceInfo,
   SPIConfig,
   FlashInfo,
+  FlashProgress,
   GPIOState,
 } from './types';
 import { SPISpeed, SPIMode } from './constants';
@@ -262,7 +263,7 @@ export class CH347Device {
     options?: {
       erase?: boolean;
       verify?: boolean;
-      onProgress?: (progress: { percentage: number }) => void;
+      onProgress?: (progress: FlashProgress) => void;
     }
   ): Promise<boolean> {
     return this.flash.programFile(filePath, address, options);

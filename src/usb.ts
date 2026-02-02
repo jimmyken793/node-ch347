@@ -23,6 +23,7 @@ export class CH347USB {
   private epIn: usb.InEndpoint | null = null;
   private epOut: usb.OutEndpoint | null = null;
   private isOpen = false;
+  private _maxPacketSize = 64; // Default to Full-Speed, updated on open
 
   /**
    * Get the underlying USB device (for advanced operations)
@@ -91,6 +92,27 @@ export class CH347USB {
 
     try {
       this.device.open();
+
+      // Log device speed and configuration
+      if (process.env.DEBUG_USB === '1') {
+        const desc = this.device.deviceDescriptor;
+        console.log(`[USB] Device: VID=${desc.idVendor.toString(16)} PID=${desc.idProduct.toString(16)}`);
+        console.log(`[USB] Device USB version: ${(desc.bcdUSB >> 8).toString(16)}.${(desc.bcdUSB & 0xff).toString(16).padStart(2, '0')}`);
+        // List all configurations and interfaces
+        const configs = this.device.allConfigDescriptors;
+        for (const config of configs) {
+          console.log(`[USB] Config ${config.bConfigurationValue}: ${config.interfaces.length} interfaces`);
+          for (let i = 0; i < config.interfaces.length; i++) {
+            const iface = config.interfaces[i];
+            for (const alt of iface) {
+              console.log(`[USB]   Interface ${alt.bInterfaceNumber} alt ${alt.bAlternateSetting}: ${alt.endpoints.length} endpoints`);
+              for (const ep of alt.endpoints) {
+                console.log(`[USB]     EP 0x${ep.bEndpointAddress.toString(16)}: maxPacketSize=${ep.wMaxPacketSize}`);
+              }
+            }
+          }
+        }
+      }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       throw new Error(`Failed to open device: ${message}`);
@@ -112,12 +134,20 @@ export class CH347USB {
       throw new Error(`Failed to claim interface: ${message}`);
     }
 
-    // Find endpoints
+    // Find endpoints and detect max packet size
     for (const endpoint of this.interface.endpoints) {
       if (endpoint.address === CH347_EP_IN) {
         this.epIn = endpoint as usb.InEndpoint;
+        // Use the IN endpoint's packet size as our reference
+        this._maxPacketSize = endpoint.descriptor.wMaxPacketSize;
+        if (process.env.DEBUG_USB === '1') {
+          console.log(`[USB] IN endpoint 0x${endpoint.address.toString(16)}: packetSize=${endpoint.descriptor.wMaxPacketSize}, type=${endpoint.transferType}`);
+        }
       } else if (endpoint.address === CH347_EP_OUT) {
         this.epOut = endpoint as usb.OutEndpoint;
+        if (process.env.DEBUG_USB === '1') {
+          console.log(`[USB] OUT endpoint 0x${endpoint.address.toString(16)}: packetSize=${endpoint.descriptor.wMaxPacketSize}, type=${endpoint.transferType}`);
+        }
       }
     }
 
@@ -127,6 +157,10 @@ export class CH347USB {
     }
 
     this.isOpen = true;
+
+    if (process.env.DEBUG_USB === '1') {
+      console.log(`[USB] Detected ${this.isHighSpeed() ? 'High-Speed' : 'Full-Speed'} USB (maxPacketSize=${this._maxPacketSize}, maxDataLen=${this.getMaxDataLen()})`);
+    }
   }
 
   /**
@@ -161,6 +195,32 @@ export class CH347USB {
    */
   isConnected(): boolean {
     return this.isOpen;
+  }
+
+  /**
+   * Check if device is operating in High-Speed mode (512-byte packets)
+   */
+  isHighSpeed(): boolean {
+    return this._maxPacketSize >= 512;
+  }
+
+  /**
+   * Get the maximum USB packet size for bulk transfers
+   */
+  getMaxPacketSize(): number {
+    return this._maxPacketSize;
+  }
+
+  /**
+   * Get the maximum data payload size (packet size minus 3-byte header)
+   * For High-Speed (512-byte): 507 bytes (vendor driver limit)
+   * For Full-Speed (64-byte): 60 bytes (with safety margin)
+   */
+  getMaxDataLen(): number {
+    if (this._maxPacketSize >= 512) {
+      return 507; // Vendor driver limit for High-Speed
+    }
+    return 60; // Safe for Full-Speed (64 - 3 header - 1 margin)
   }
 
   /**
