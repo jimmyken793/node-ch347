@@ -574,11 +574,8 @@ export class CH347Flash {
     } = {}
   ): Promise<boolean> {
     const { erase = true, verify = true, onProgress } = options;
-
-    console.log("Reading original content...");
     // Read original content to compare
     const original = await this.read(address, data.length, onProgress);
-    console.log("");
 
     // Analyze which sectors need erasing and which need writing
     const sectorsToErase: number[] = [];
