@@ -29,6 +29,14 @@
   ],
   "author": "",
   "license": "Unlicense",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jimmyken793/node-ch347.git"
+  },
+  "homepage": "https://github.com/jimmyken793/node-ch347#readme",
+  "bugs": {
+    "url": "https://github.com/jimmyken793/node-ch347/issues"
+  },
   "dependencies": {
     "usb": "^2.14.0"
   },
