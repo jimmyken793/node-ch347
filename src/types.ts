@@ -4,6 +4,15 @@
 
 import { SPISpeed, SPIMode, I2CSpeed } from './constants';
 
+/**
+ * Windows USB backend options
+ * - 'usbdk': UsbDk backend (recommended) - coexists with vendor driver
+ * - 'winusb': Native WinUSB - requires Zadig driver replacement
+ * - 'wch': WCH's CH347DLL.dll - requires DLL in PATH or app directory
+ * - 'auto': Try UsbDk first, then WinUSB
+ */
+export type WindowsUsbBackend = 'usbdk' | 'winusb' | 'wch' | 'auto';
+
 export interface CH347DeviceInfo {
   vendorId: number;
   productId: number;

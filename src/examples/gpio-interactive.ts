@@ -2,10 +2,11 @@
  * CH347 Interactive GPIO Test
  *
  * Toggle GPIO pins interactively via command line
+ * Cross-platform: Works on Linux, macOS, and Windows
  */
 
 import * as readline from 'readline';
-import CH347Device from '../index';
+import CH347Device, { isWCHDLLAvailable, CH347WCH } from '../index';
 
 const GPIO_NAMES: Record<number, string> = {
   0: 'GPIO0',
@@ -33,16 +34,35 @@ async function printStatus() {
 }
 
 async function main() {
-  console.log('CH347 Interactive GPIO Test\n');
+  const isWindows = process.platform === 'win32';
+  const useWCHBackend = isWindows && isWCHDLLAvailable();
 
-  // Find and open device
-  const devices = CH347Device.listDevices();
-  if (devices.length === 0) {
+  console.log('CH347 Interactive GPIO Test');
+  console.log(`Platform: ${process.platform}`);
+  if (isWindows) {
+    console.log(`Backend: ${useWCHBackend ? 'WCH DLL' : 'libusb'}`);
+  }
+  console.log('');
+
+  // Find devices
+  let deviceCount = 0;
+  if (useWCHBackend) {
+    deviceCount = CH347WCH.listDevices().length;
+  } else {
+    deviceCount = CH347Device.listDevices().length;
+  }
+
+  if (deviceCount === 0) {
     console.log('No CH347 devices found!');
+    if (isWindows && !useWCHBackend) {
+      console.log('Tip: Install koffi (npm install koffi) and CH347DLL.dll for WCH backend');
+    }
     return;
   }
 
-  ch347 = new CH347Device();
+  ch347 = new CH347Device({
+    backend: useWCHBackend ? 'wch' : 'auto',
+  });
   await ch347.open(0);
   console.log('Device opened!\n');
 

@@ -14,7 +14,9 @@
     "dev": "tsc --watch",
     "test": "node --test dist/**/*.test.js",
     "prepublishOnly": "npm run build",
-    "example": "node dist/examples/basic.js"
+    "example": "node dist/examples/basic.js",
+    "test:wch-dll": "node dist/examples/test-wch-dll.js",
+    "test:wch-backend": "node dist/examples/test-wch-backend.js"
   },
   "keywords": [
     "ch347",
@@ -41,7 +43,7 @@
     "usb": "^2.14.0"
   },
   "optionalDependencies": {
-    "serialport": "^12.0.0"
+    "koffi": "^2.9.0"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",
@@ -52,6 +54,7 @@
   },
   "os": [
     "linux",
-    "darwin"
+    "darwin",
+    "win32"
   ]
 }

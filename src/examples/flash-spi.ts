@@ -2,13 +2,21 @@
 /**
  * SPI Flash Programming Tool
  *
+ * Cross-platform: Works on Linux, macOS, and Windows
+ *
  * Usage: npx ts-node src/examples/flash-spi.ts <firmware.bin>
  *    or: node dist/examples/flash-spi.js <firmware.bin>
  */
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { CH347Device, SPISpeed, FlashManufacturers } from '../index';
+import {
+  CH347Device,
+  SPISpeed,
+  FlashManufacturers,
+  isWCHDLLAvailable,
+  CH347WCH,
+} from '../index';
 
 async function main() {
   // Parse command line arguments
@@ -35,7 +43,31 @@ async function main() {
   const fileSize = fs.statSync(firmwarePath).size;
   console.log(`File: ${path.basename(firmwarePath)} (${fileSize} bytes)`);
 
-  // Create device instance
+  // Determine backend
+  const isWindows = process.platform === 'win32';
+  const useWCHBackend = isWindows && isWCHDLLAvailable();
+
+  if (isWindows) {
+    console.log(`Backend: ${useWCHBackend ? 'WCH DLL' : 'libusb'}`);
+  }
+
+  // Check for devices
+  let deviceCount = 0;
+  if (useWCHBackend) {
+    deviceCount = CH347WCH.listDevices().length;
+  } else {
+    deviceCount = CH347Device.listDevices().length;
+  }
+
+  if (deviceCount === 0) {
+    console.error('Error: No CH347 devices found!');
+    if (isWindows && !useWCHBackend) {
+      console.log('Tip: Install koffi (npm install koffi) and CH347DLL.dll for WCH backend');
+    }
+    process.exit(1);
+  }
+
+  // Create device instance with appropriate backend
   const device = new CH347Device({
     spi: {
       speed: SPISpeed.CLK_15M,
@@ -43,16 +75,10 @@ async function main() {
       chipSelect: 0,
       bitOrder: 'MSB',
     },
+    backend: useWCHBackend ? 'wch' : 'auto',
   });
 
   try {
-    // List available devices
-    const devices = CH347Device.listDevices();
-    if (devices.length === 0) {
-      console.error('Error: No CH347 devices found!');
-      process.exit(1);
-    }
-
     // Open device
     console.log('Opening CH347 device...');
     await device.open(0);
@@ -82,7 +108,7 @@ async function main() {
     // Program flash
     console.log('');
     console.log('--- Programming ---');
-    console.log(`Writing ${fileSize} bytes to fdaddress 0x00000000...`);
+    console.log(`Writing ${fileSize} bytes to address 0x00000000...`);
 
     // Program flash
     console.log('Programming flash (erase + write + verify)...');

@@ -15,7 +15,84 @@ import {
   CH347_PACKET_SIZE,
   CH347_TIMEOUT_MS,
 } from './constants';
-import { CH347DeviceInfo } from './types';
+import { CH347DeviceInfo, WindowsUsbBackend } from './types';
+
+// Windows USB backend configuration
+let windowsBackend: WindowsUsbBackend = 'auto';
+let backendInitialized = false;
+
+/**
+ * Set the Windows USB backend to use.
+ * Must be called before any USB operations.
+ *
+ * @param backend - 'usbdk' (recommended, coexists with vendor driver),
+ *                  'winusb' (requires Zadig driver replacement),
+ *                  'wch' (use WCH's CH347DLL.dll - requires DLL, use CH347WCH class), or
+ *                  'auto' (try UsbDk first, fall back to WinUSB)
+ */
+export function setWindowsBackend(backend: WindowsUsbBackend): void {
+  if (backendInitialized) {
+    console.warn('[CH347] Warning: USB backend already initialized. Restart the application for changes to take effect.');
+  }
+  windowsBackend = backend;
+}
+
+/**
+ * Get the current Windows USB backend setting
+ */
+export function getWindowsBackend(): WindowsUsbBackend {
+  return windowsBackend;
+}
+
+/**
+ * Initialize the USB backend (called automatically on first use)
+ */
+function initializeBackend(): void {
+  if (backendInitialized) {
+    return;
+  }
+
+  if (process.platform === 'win32') {
+    const envBackend = process.env.CH347_USB_BACKEND?.toLowerCase();
+    if (envBackend === 'usbdk' || envBackend === 'winusb' || envBackend === 'wch' || envBackend === 'auto') {
+      windowsBackend = envBackend as WindowsUsbBackend;
+    }
+
+    if (windowsBackend === 'wch') {
+      // WCH DLL backend - user should use CH347WCH class instead of CH347USB
+      if (process.env.DEBUG_USB === '1') {
+        console.log('[USB] WCH DLL backend selected. Use CH347WCH class for device access.');
+      }
+      // Don't initialize libusb backend for WCH mode
+    } else if (windowsBackend === 'usbdk') {
+      try {
+        usb.useUsbDkBackend();
+        if (process.env.DEBUG_USB === '1') {
+          console.log('[USB] Using UsbDk backend on Windows');
+        }
+      } catch (err) {
+        console.warn('[CH347] Failed to initialize UsbDk backend. Is UsbDk installed?');
+        console.warn('[CH347] Install from: https://github.com/daynix/UsbDk/releases');
+        console.warn('[CH347] Falling back to WinUSB (requires Zadig driver)');
+      }
+    } else if (windowsBackend === 'auto') {
+      // Try UsbDk first, fall back to WinUSB
+      try {
+        usb.useUsbDkBackend();
+        if (process.env.DEBUG_USB === '1') {
+          console.log('[USB] Using UsbDk backend on Windows (auto-detected)');
+        }
+      } catch {
+        if (process.env.DEBUG_USB === '1') {
+          console.log('[USB] UsbDk not available, using WinUSB backend');
+        }
+      }
+    }
+    // 'winusb' is the default libusb behavior, no action needed
+  }
+
+  backendInitialized = true;
+}
 
 export class CH347USB {
   private device: usb.Device | null = null;
@@ -36,8 +113,19 @@ export class CH347USB {
    * List all connected CH347 devices
    */
   static listDevices(): CH347DeviceInfo[] {
+    initializeBackend();
+
     const devices: CH347DeviceInfo[] = [];
     const allDevices = usb.getDeviceList();
+
+    // On Windows, provide helpful message if no devices found
+    if (process.platform === 'win32' && allDevices.length === 0) {
+      console.warn('[CH347] No USB devices found on Windows.');
+      console.warn('[CH347] Ensure one of the following:');
+      console.warn('[CH347]   1. UsbDk is installed: https://github.com/daynix/UsbDk/releases');
+      console.warn('[CH347]   2. Or WinUSB driver installed via Zadig: https://zadig.akeo.ie/');
+      console.warn('[CH347] Set CH347_USB_BACKEND=winusb or CH347_USB_BACKEND=usbdk to select backend.');
+    }
 
     for (const device of allDevices) {
       const desc = device.deviceDescriptor;
@@ -167,27 +255,58 @@ export class CH347USB {
    * Close connection
    */
   close(): void {
-    if (this.interface) {
-      try {
-        this.interface.release(true);
-      } catch {
-        // Ignore
-      }
-      this.interface = null;
-    }
+    const iface = this.interface;
+    const dev = this.device;
 
-    if (this.device) {
-      try {
-        this.device.close();
-      } catch {
-        // Ignore
-      }
-      this.device = null;
-    }
-
+    // Clear references first to prevent any callbacks from using stale state
+    this.interface = null;
     this.epIn = null;
     this.epOut = null;
     this.isOpen = false;
+
+    if (iface) {
+      try {
+        // Release interface with closeEndpoints=true
+        // This cancels any pending transfers
+        iface.release(true, () => {
+          // Interface released, now close the device
+          if (dev) {
+            try {
+              dev.close();
+            } catch {
+              // Ignore close errors
+            }
+          }
+          // Disable hotplug events to allow the process to exit cleanly
+          try {
+            (usb.usb as any)._disableHotplugEvents();
+          } catch {
+            // Ignore if not available
+          }
+        });
+      } catch {
+        // Release failed, try to close device anyway
+        if (dev) {
+          try {
+            dev.close();
+          } catch {
+            // Ignore
+          }
+        }
+      }
+    } else if (dev) {
+      try {
+        dev.close();
+      } catch {
+        // Ignore
+      }
+      // Disable hotplug events
+      try {
+        (usb.usb as any)._disableHotplugEvents();
+      } catch {
+        // Ignore
+      }
+    }
   }
 
   /**

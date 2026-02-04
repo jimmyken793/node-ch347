@@ -2,34 +2,74 @@
  * CH347 Basic Example
  *
  * Demonstrates GPIO and SPI flash functionality
+ * Cross-platform: Works on Linux, macOS, and Windows
  */
 
-import CH347Device, { SPISpeed, SPIMode } from '../index';
+import CH347Device, {
+  SPISpeed,
+  SPIMode,
+  isWCHDLLAvailable,
+  CH347WCH,
+} from '../index';
 
 async function main() {
+  const isWindows = process.platform === 'win32';
+
+  // On Windows, prefer WCH DLL backend if available
+  const useWCHBackend = isWindows && isWCHDLLAvailable();
+
+  console.log('=== CH347 Basic Example ===');
+  console.log(`Platform: ${process.platform}`);
+  if (isWindows) {
+    console.log(`Backend: ${useWCHBackend ? 'WCH DLL' : 'libusb'}`);
+  }
+  console.log('');
+
   // List available devices
   console.log('Scanning for CH347 devices...');
-  const devices = CH347Device.listDevices();
 
-  if (devices.length === 0) {
+  let deviceCount = 0;
+  if (useWCHBackend) {
+    // Use WCH DLL to list devices
+    const devices = CH347WCH.listDevices();
+    deviceCount = devices.length;
+    if (devices.length > 0) {
+      console.log(`Found ${devices.length} device(s): indices ${devices.join(', ')}`);
+    }
+  } else {
+    // Use libusb to list devices
+    const devices = CH347Device.listDevices();
+    deviceCount = devices.length;
+    if (devices.length > 0) {
+      console.log(`Found ${devices.length} device(s):`);
+      devices.forEach((dev, i) => {
+        console.log(`  [${i}] VID:${dev.vendorId.toString(16)} PID:${dev.productId.toString(16)} ${dev.product || ''}`);
+      });
+    }
+  }
+
+  if (deviceCount === 0) {
     console.log('No CH347 devices found!');
     console.log('Make sure:');
     console.log('  1. CH347 is connected via USB');
-    console.log('  2. You have appropriate permissions (udev rules on Linux)');
+    if (isWindows) {
+      console.log('  2. CH347 driver is installed (WCH driver or WinUSB via Zadig)');
+      if (!useWCHBackend) {
+        console.log('  3. For WCH backend: install koffi (npm install koffi) and CH347DLL.dll');
+      }
+    } else {
+      console.log('  2. You have appropriate permissions (udev rules on Linux)');
+    }
     return;
   }
 
-  console.log(`Found ${devices.length} device(s):`);
-  devices.forEach((dev, i) => {
-    console.log(`  [${i}] VID:${dev.vendorId.toString(16)} PID:${dev.productId.toString(16)} ${dev.product || ''}`);
-  });
-
-  // Create device instance
+  // Create device instance with appropriate backend
   const ch347 = new CH347Device({
     spi: {
       speed: SPISpeed.CLK_15M,
       mode: SPIMode.MODE_0,
     },
+    backend: useWCHBackend ? 'wch' : 'auto',
   });
 
   try {
@@ -106,7 +146,12 @@ async function main() {
       console.log(`UART path for this device: ${uartPath}`);
       console.log('  Use a serial library like serialport to communicate via this path');
     } else {
-      console.log('  Could not determine UART path');
+      if (useWCHBackend) {
+        console.log('  UART path discovery not available with WCH backend');
+        console.log('  Use Windows Device Manager to find COM port');
+      } else {
+        console.log('  Could not determine UART path');
+      }
     }
 
     // ==================== Cleanup ====================

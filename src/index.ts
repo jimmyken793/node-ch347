@@ -5,14 +5,23 @@
  * Supports GPIO and SPI flash programming.
  * UART path discovery is provided; use external serial libraries for UART communication.
  *
- * Cross-platform: Linux and macOS
+ * Cross-platform: Linux, macOS, and Windows
+ * Windows requires UsbDk or WinUSB driver (via Zadig), or WCH DLL
  */
 
-// Core modules
-export { CH347USB } from './usb';
+// Backend interface and implementations
+export { CH347Backend } from './backend';
+export { LibUSBBackend } from './backend-libusb';
+export { WCHBackend } from './backend-wch';
+
+// Core modules (for advanced usage)
+export { CH347USB, setWindowsBackend, getWindowsBackend } from './usb';
 export { CH347GPIO } from './gpio';
 export { CH347SPI } from './spi';
 export { CH347Flash } from './flash';
+
+// WCH DLL (for direct access)
+export { CH347WCH, isWCHDLLAvailable, loadWCHDLL, getWCHDLLError } from './wch-dll';
 
 // Device configuration (serial number, etc.)
 export {
@@ -27,10 +36,13 @@ export * from './types';
 export * from './constants';
 
 // Convenience class that combines all functionality
-import { CH347USB } from './usb';
-import { CH347GPIO } from './gpio';
-import { CH347SPI } from './spi';
+import { CH347Backend } from './backend';
+import { LibUSBBackend } from './backend-libusb';
+import { WCHBackend } from './backend-wch';
 import { CH347Flash } from './flash';
+import { CH347SPI } from './spi';
+import { isWCHDLLAvailable } from './wch-dll';
+import { getWindowsBackend } from './usb';
 import {
   listDevicesWithSerial,
   CH347DeviceWithSerial,
@@ -41,34 +53,55 @@ import {
   FlashInfo,
   FlashProgress,
   GPIOState,
+  WindowsUsbBackend,
 } from './types';
-import { SPISpeed, SPIMode } from './constants';
 
 export interface CH347DeviceOptions {
   spi?: Partial<SPIConfig>;
+  /**
+   * Force a specific backend.
+   * - 'auto': Auto-select based on platform (default)
+   * - 'usbdk': Use UsbDk backend (Windows)
+   * - 'winusb': Use WinUSB backend (Windows)
+   * - 'wch': Use WCH DLL backend (Windows only)
+   */
+  backend?: WindowsUsbBackend;
 }
 
 /**
  * Main CH347 device class
- * Provides unified access to GPIO, SPI, and Flash functionality
+ * Provides unified access to GPIO, SPI, and Flash functionality.
+ * Automatically selects the appropriate backend based on platform and settings.
  */
 export class CH347Device {
-  private usb: CH347USB;
-  private _gpio: CH347GPIO | null = null;
-  private _spi: CH347SPI | null = null;
+  private backend: CH347Backend | null = null;
   private _flash: CH347Flash | null = null;
   private options: CH347DeviceOptions;
+  private _usingWCHBackend = false;
 
   constructor(options: CH347DeviceOptions = {}) {
-    this.usb = new CH347USB();
     this.options = options;
+  }
+
+  /**
+   * Determine which backend to use
+   */
+  private shouldUseWCHBackend(): boolean {
+    // Only consider WCH backend on Windows
+    if (process.platform !== 'win32') {
+      return false;
+    }
+
+    // Check explicit option first
+    const backendSetting = this.options.backend ?? getWindowsBackend();
+    return backendSetting === 'wch';
   }
 
   /**
    * List all connected CH347 devices
    */
   static listDevices(): CH347DeviceInfo[] {
-    return CH347USB.listDevices();
+    return LibUSBBackend.listDevices();
   }
 
   /**
@@ -83,25 +116,68 @@ export class CH347Device {
    * @param deviceIndex Index of device to open (default 0)
    */
   async open(deviceIndex = 0): Promise<void> {
-    await this.usb.open(deviceIndex);
+    this._usingWCHBackend = this.shouldUseWCHBackend();
 
-    // Initialize GPIO
-    this._gpio = new CH347GPIO(this.usb);
+    if (this._usingWCHBackend) {
+      // Use WCH DLL backend
+      if (!isWCHDLLAvailable()) {
+        throw new Error(
+          'WCH DLL backend selected but not available. ' +
+          'Install koffi (npm install koffi) and ' +
+          'download CH347DLL.dll from: https://www.wch.cn/downloads/CH341PAR_ZIP.html'
+        );
+      }
 
-    // Initialize SPI with optional config
-    this._spi = new CH347SPI(this.usb, this.options.spi);
+      this.backend = new WCHBackend(this.options.spi);
+    } else {
+      // Use libusb backend (default)
+      this.backend = new LibUSBBackend();
+    }
 
-    // Initialize Flash (wraps SPI)
-    this._flash = new CH347Flash(this._spi);
+    await this.backend.open(deviceIndex);
+
+    // Initialize SPI with config if provided
+    if (this.options.spi) {
+      await this.backend.spiInit(this.options.spi);
+    }
+
+    // Create Flash wrapper using a SPI adapter
+    this._flash = new CH347Flash(this.createSPIAdapter());
+  }
+
+  /**
+   * Create a CH347SPI-compatible adapter for the Flash class
+   */
+  private createSPIAdapter(): CH347SPI {
+    const backend = this.backend!;
+
+    // Create an object that implements the CH347SPI interface
+    // This allows CH347Flash to work with any backend
+    return {
+      init: async (config?: Partial<SPIConfig>) => backend.spiInit(config),
+      sendCommand: async (writeData: Buffer, readLength = 0) =>
+        backend.spiSendCommand(writeData, readLength),
+      command: async (writeData: Buffer, readLength = 0) =>
+        backend.spiSendCommand(writeData, readLength),
+      transfer: async (data: Buffer) => backend.spiTransfer(data),
+      write: async (data: Buffer) => { await backend.spiSendCommand(data, 0); },
+      read: async (length: number) => backend.spiSendCommand(Buffer.alloc(0), length),
+      writeRead: async (data: Buffer) => backend.spiTransfer(data),
+      setChipSelect: async (_active: boolean) => { /* handled internally */ },
+      csControl: async (_cs1: number, _cs2?: number) => { /* handled internally */ },
+      getConfig: () => backend.spiGetConfig(),
+      isReady: () => backend.spiIsInitialized(),
+    } as unknown as CH347SPI;
   }
 
   /**
    * Close connection
    */
   close(): void {
-    this.usb.close();
-    this._gpio = null;
-    this._spi = null;
+    if (this.backend) {
+      this.backend.close();
+      this.backend = null;
+    }
     this._flash = null;
   }
 
@@ -109,35 +185,26 @@ export class CH347Device {
    * Check if device is connected
    */
   isConnected(): boolean {
-    return this.usb.isConnected();
+    return this.backend?.isConnected() ?? false;
   }
 
   /**
    * Get the UART tty path for this CH347 device
    * Returns the serial port path (e.g., '/dev/ttyACM0' on Linux, '/dev/tty.usbmodem*' on macOS)
+   * Note: Not available when using WCH DLL backend on Windows
    */
   getUARTPath(): string | null {
-    return this.usb.getUARTPath();
+    return this.backend?.getUARTPath() ?? null;
   }
 
   /**
-   * Get GPIO controller
+   * Get the underlying backend (for advanced usage)
    */
-  get gpio(): CH347GPIO {
-    if (!this._gpio) {
+  getBackend(): CH347Backend {
+    if (!this.backend) {
       throw new Error('Device not open');
     }
-    return this._gpio;
-  }
-
-  /**
-   * Get SPI controller
-   */
-  get spi(): CH347SPI {
-    if (!this._spi) {
-      throw new Error('Device not open');
-    }
-    return this._spi;
+    return this.backend;
   }
 
   /**
@@ -150,48 +217,82 @@ export class CH347Device {
     return this._flash;
   }
 
+  /**
+   * Check if using WCH DLL backend
+   */
+  isUsingWCHBackend(): boolean {
+    return this._usingWCHBackend;
+  }
+
   // ==================== GPIO Convenience Methods ====================
 
   /**
    * Read all GPIO pin states
    */
   async gpioReadAll(): Promise<GPIOState[]> {
-    return this.gpio.readAll();
+    if (!this.backend) throw new Error('Device not open');
+    return this.backend.gpioReadAll();
   }
 
   /**
    * Set GPIO pin output value
    */
   async gpioWrite(pin: number, value: boolean): Promise<void> {
-    return this.gpio.write(pin, value);
+    if (!this.backend) throw new Error('Device not open');
+    return this.backend.gpioWrite(pin, value);
   }
 
   /**
    * Read GPIO pin state
    */
   async gpioRead(pin: number): Promise<GPIOState> {
-    return this.gpio.read(pin);
+    if (!this.backend) throw new Error('Device not open');
+    return this.backend.gpioRead(pin);
   }
 
   /**
    * Pulse GPIO pin (for button press simulation)
    */
-  async gpioPulse(
-    pin: number,
-    durationMs = 100,
-    activeHigh = true
-  ): Promise<void> {
-    return this.gpio.pulse(pin, durationMs, activeHigh);
+  async gpioPulse(pin: number, durationMs = 100, activeHigh = true): Promise<void> {
+    if (!this.backend) throw new Error('Device not open');
+    return this.backend.gpioPulse(pin, durationMs, activeHigh);
   }
 
-  // ==================== SPI Flash Convenience Methods ====================
+  /**
+   * Toggle GPIO pin
+   */
+  async gpioToggle(pin: number): Promise<boolean> {
+    if (!this.backend) throw new Error('Device not open');
+    return this.backend.gpioToggle(pin);
+  }
+
+  // ==================== SPI Convenience Methods ====================
 
   /**
    * Initialize SPI interface
    */
   async spiInit(config?: Partial<SPIConfig>): Promise<void> {
-    return this.spi.init(config);
+    if (!this.backend) throw new Error('Device not open');
+    return this.backend.spiInit(config);
   }
+
+  /**
+   * SPI transfer (write and read)
+   */
+  async spiTransfer(writeData: Buffer, readLength?: number): Promise<Buffer> {
+    if (!this.backend) throw new Error('Device not open');
+    return this.backend.spiTransfer(writeData, readLength);
+  }
+
+  /**
+   * Send SPI command and read response
+   */
+  async spiSendCommand(writeData: Buffer, readLength = 0): Promise<Buffer> {
+    if (!this.backend) throw new Error('Device not open');
+    return this.backend.spiSendCommand(writeData, readLength);
+  }
+
+  // ==================== SPI Flash Convenience Methods ====================
 
   /**
    * Read flash JEDEC ID
@@ -255,7 +356,6 @@ export class CH347Device {
 
   /**
    * Program flash from a binary file
-   * If address is not specified, requires file size to match flash size (call flashReadId first)
    */
   async flashProgramFile(
     filePath: string,

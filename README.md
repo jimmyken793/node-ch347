@@ -1,5 +1,9 @@
 # node-ch347
 
+[![npm version](https://img.shields.io/npm/v/node-ch347.svg)](https://www.npmjs.com/package/node-ch347)
+[![npm downloads](https://img.shields.io/npm/dm/node-ch347.svg)](https://www.npmjs.com/package/node-ch347)
+[![license](https://img.shields.io/npm/l/node-ch347.svg)](https://github.com/jimmyken793/node-ch347/blob/main/LICENSE)
+
 A Node.js library for interfacing with WCH CH347 USB devices. Supports GPIO control and SPI flash programming.
 
 > **Note:** This is an early release (v0.0.1). The API may change in future versions.
@@ -12,7 +16,7 @@ A Node.js library for interfacing with WCH CH347 USB devices. Supports GPIO cont
   - JEDEC ID detection
   - Sector (4KB), block (32KB/64KB), and chip erase
 - **UART Path Discovery**: Get the serial port path for use with external libraries
-- **Cross-Platform**: Works on Linux and macOS
+- **Cross-Platform**: Works on Linux, macOS, and Windows
 
 ## Installation
 
@@ -40,6 +44,89 @@ sudo udevadm trigger
 # Install libusb via Homebrew
 brew install libusb
 ```
+
+**Windows:**
+
+Windows requires a USB driver that exposes the CH347. Choose one of these options:
+
+**Option 1: UsbDk (Recommended)** - Coexists with WCH vendor driver
+1. Download and install UsbDk from: https://github.com/daynix/UsbDk/releases
+2. Both node-ch347 and WCH's official tools will work
+
+**Option 2: WinUSB via Zadig** - Replaces vendor driver
+1. Download Zadig from: https://zadig.akeo.ie/
+2. Run Zadig as Administrator
+3. Options → List All Devices
+4. Select your CH347 device (VID: 1A86, PID: 55DB)
+5. Select "WinUSB" as the target driver
+6. Click "Replace Driver"
+
+> **Note:** After installing WinUSB, WCH's official tools (CH347Demo, etc.) will no longer work. Use UsbDk if you need both.
+
+**Option 3: WCH DLL** - Use WCH's proprietary CH347DLL.dll
+1. Download CH347EVT from: https://www.wch.cn/downloads/CH341PAR_ZIP.html
+2. Extract `CH347DLL.dll` (or `CH347DLLA64.dll` for 64-bit) to your application directory or system PATH
+3. Install FFI dependencies: `npm install ffi-napi ref-napi`
+4. Use the `CH347WCH` class instead of `CH347Device`
+
+> **Note:** The WCH DLL is NOT included in this package due to licensing concerns. You must obtain it from WCH directly.
+
+### Windows USB Backend Selection
+
+By default, the library uses "auto" mode which tries UsbDk first, then falls back to WinUSB.
+
+```typescript
+import { setWindowsBackend } from 'node-ch347';
+
+// Use UsbDk backend (recommended, coexists with vendor driver)
+setWindowsBackend('usbdk');
+
+// Use native WinUSB (requires Zadig driver replacement)
+setWindowsBackend('winusb');
+
+// Use WCH's CH347DLL.dll (requires DLL in PATH)
+setWindowsBackend('wch');
+
+// Auto-detect (try UsbDk first, fall back to WinUSB)
+setWindowsBackend('auto');
+```
+
+Or set via environment variable:
+```bash
+set CH347_USB_BACKEND=usbdk
+set CH347_USB_BACKEND=winusb
+set CH347_USB_BACKEND=wch
+```
+
+### Using WCH DLL Backend
+
+The WCH DLL backend works with the same `CH347Device` class - just set the backend:
+
+```typescript
+import CH347Device, { setWindowsBackend, SPISpeed } from 'node-ch347';
+
+// Option 1: Set globally before opening any device
+setWindowsBackend('wch');
+
+// Option 2: Set per-device via options
+const device = new CH347Device({
+  backend: 'wch',
+  spi: { speed: SPISpeed.CLK_15M }
+});
+
+await device.open();
+
+// Same API as other backends
+const flashInfo = await device.flashReadId();
+console.log(`Flash: ${flashInfo.name}`);
+
+await device.gpioWrite(3, true);
+const states = await device.gpioReadAll();
+
+device.close();
+```
+
+You can also use the low-level `CH347WCH` class directly for advanced use cases.
 
 ## Quick Start
 
@@ -185,7 +272,9 @@ ch347.close();
 
 ### UART Path Discovery
 
-The library provides UART path discovery. Use an external serial library like `serialport` for actual communication:
+The library provides UART path discovery on Linux and macOS. Use an external serial library like `serialport` for actual communication:
+
+> **Note:** Windows UART path discovery is not yet implemented. On Windows, manually specify the COM port (e.g., `COM3`).
 
 ```typescript
 import CH347Device from 'node-ch347';
