@@ -29,6 +29,12 @@ export class LibUSBBackend implements CH347Backend {
   private spiConfig: SPIConfig = { ...DEFAULT_SPI_CONFIG };
   private _spiInitialized = false;
 
+  constructor(config?: Partial<SPIConfig>) {
+    if (config) {
+      this.spiConfig = { ...this.spiConfig, ...config };
+    }
+  }
+
   /**
    * List all connected CH347 devices
    */
@@ -57,6 +63,10 @@ export class LibUSBBackend implements CH347Backend {
 
     this.gpio = new CH347GPIO(this.usb);
     this.spi = new CH347SPI(this.usb, this.spiConfig);
+
+    // Auto-initialize SPI with config
+    await this.spi.init(this.spiConfig);
+    this._spiInitialized = true;
   }
 
   close(): void {

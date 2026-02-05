@@ -69,6 +69,21 @@ export interface CH347DeviceOptions {
 }
 
 /**
+ * Get the currently active backend class based on platform and settings.
+ * @param backendOverride Optional backend override (from device options)
+ */
+function getActiveBackendClass(backendOverride?: WindowsUsbBackend): typeof LibUSBBackend | typeof WCHBackend {
+  // Only consider WCH backend on Windows
+  if (process.platform === 'win32') {
+    const backendSetting = backendOverride ?? getWindowsBackend();
+    if (backendSetting === 'wch' && isWCHDLLAvailable()) {
+      return WCHBackend;
+    }
+  }
+  return LibUSBBackend;
+}
+
+/**
  * Main CH347 device class
  * Provides unified access to GPIO, SPI, and Flash functionality.
  * Automatically selects the appropriate backend based on platform and settings.
@@ -84,24 +99,18 @@ export class CH347Device {
   }
 
   /**
-   * Determine which backend to use
+   * Get the backend class for this device instance
    */
-  private shouldUseWCHBackend(): boolean {
-    // Only consider WCH backend on Windows
-    if (process.platform !== 'win32') {
-      return false;
-    }
-
-    // Check explicit option first
-    const backendSetting = this.options.backend ?? getWindowsBackend();
-    return backendSetting === 'wch';
+  private getBackendClass(): typeof LibUSBBackend | typeof WCHBackend {
+    return getActiveBackendClass(this.options.backend);
   }
 
   /**
    * List all connected CH347 devices
+   * Respects the current backend selection on Windows.
    */
   static listDevices(): CH347DeviceInfo[] {
-    return LibUSBBackend.listDevices();
+    return getActiveBackendClass().listDevices();
   }
 
   /**
@@ -116,30 +125,17 @@ export class CH347Device {
    * @param deviceIndex Index of device to open (default 0)
    */
   async open(deviceIndex = 0): Promise<void> {
-    this._usingWCHBackend = this.shouldUseWCHBackend();
+    const BackendClass = this.getBackendClass();
+    this._usingWCHBackend = BackendClass === WCHBackend;
 
+    // Both backends now accept SPI config in constructor and auto-initialize
     if (this._usingWCHBackend) {
-      // Use WCH DLL backend
-      if (!isWCHDLLAvailable()) {
-        throw new Error(
-          'WCH DLL backend selected but not available. ' +
-          'Install koffi (npm install koffi) and ' +
-          'download CH347DLL.dll from: https://www.wch.cn/downloads/CH341PAR_ZIP.html'
-        );
-      }
-
       this.backend = new WCHBackend(this.options.spi);
     } else {
-      // Use libusb backend (default)
-      this.backend = new LibUSBBackend();
+      this.backend = new LibUSBBackend(this.options.spi);
     }
 
     await this.backend.open(deviceIndex);
-
-    // Initialize SPI with config if provided
-    if (this.options.spi) {
-      await this.backend.spiInit(this.options.spi);
-    }
 
     // Create Flash wrapper using a SPI adapter
     this._flash = new CH347Flash(this.createSPIAdapter());

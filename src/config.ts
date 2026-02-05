@@ -10,6 +10,9 @@ import {
   CH347_PID_SPI_I2C_UART,
   CH347_PID_JTAG_I2C_UART,
 } from './constants';
+import { getWindowsBackend } from './usb';
+import { isWCHDLLAvailable } from './wch-dll';
+import { WCHBackend } from './backend-wch';
 
 export interface CH347DeviceWithSerial {
   index: number;
@@ -23,9 +26,36 @@ export interface CH347DeviceWithSerial {
 }
 
 /**
- * List all connected CH347 devices with their serial numbers
+ * Check if WCH backend should be used
+ */
+function shouldUseWCHBackend(): boolean {
+  if (process.platform !== 'win32') {
+    return false;
+  }
+  return getWindowsBackend() === 'wch' && isWCHDLLAvailable();
+}
+
+/**
+ * List all connected CH347 devices with their serial numbers.
+ * Note: When using WCH backend, serial numbers are not available (returns null).
  */
 export async function listDevicesWithSerial(): Promise<CH347DeviceWithSerial[]> {
+  // Use WCH backend if selected (serial numbers not available)
+  if (shouldUseWCHBackend()) {
+    const wchDevices = WCHBackend.listDevices();
+    return wchDevices.map((device, index) => ({
+      index,
+      vendorId: device.vendorId,
+      productId: device.productId,
+      busNumber: device.busNumber,
+      deviceAddress: device.deviceAddress,
+      serialNumber: null,
+      manufacturer: null,
+      product: null,
+    }));
+  }
+
+  // Use libusb backend (can get serial numbers)
   const devices: CH347DeviceWithSerial[] = [];
   const allDevices = usb.getDeviceList();
 

@@ -7,8 +7,8 @@
 
 import { CH347Backend } from './backend';
 import { CH347WCH, isWCHDLLAvailable, loadWCHDLL } from './wch-dll';
-import { SPIConfig, GPIOState, GPIOConfig } from './types';
-import { SPISpeed, SPIMode, CH347_GPIO_COUNT, CH347_PACKET_SIZE } from './constants';
+import { SPIConfig, GPIOState, GPIOConfig, CH347DeviceInfo } from './types';
+import { SPISpeed, SPIMode, CH347_GPIO_COUNT, CH347_PACKET_SIZE, CH347_VID, CH347_PID_SPI_I2C_UART } from './constants';
 
 const DEFAULT_SPI_CONFIG: SPIConfig = {
   speed: SPISpeed.CLK_15M,
@@ -44,8 +44,14 @@ export class WCHBackend implements CH347Backend {
   /**
    * List all connected CH347 devices
    */
-  static listDevices(): number[] {
-    return CH347WCH.listDevices();
+  static listDevices(): CH347DeviceInfo[] {
+    const deviceIndices = CH347WCH.listDevices();
+    return deviceIndices.map((deviceIndex) => ({
+      vendorId: CH347_VID,
+      productId: CH347_PID_SPI_I2C_UART,
+      busNumber: 0,
+      deviceAddress: deviceIndex,
+    }));
   }
 
   /**

@@ -118,7 +118,7 @@ export interface CH347BackendStatic {
   /**
    * List all connected CH347 devices
    */
-  listDevices(): CH347DeviceInfo[] | number[];
+  listDevices(): CH347DeviceInfo[];
 
   /**
    * Check if the backend is available

@@ -56,39 +56,39 @@ export class CH347SPI {
     }
 
     // Extract clock polarity and phase from SPI mode
-    const cpol = (this.config.mode >> 1) & 1; // bit 1 = CPOL
-    const cpha = this.config.mode & 1;        // bit 0 = CPHA
+    // Note: CPOL is stored as 0 or 2 in the USB packet (not 0 or 1)
+    const cpol = this.config.mode & 0x2;  // bit 1 = CPOL, keep as 0 or 2
+    const cpha = this.config.mode & 0x1;  // bit 0 = CPHA, 0 or 1
 
-    // Build SPI configuration packet (29 bytes total, matching flashrom)
-    // Structure based on analysis of from vendor driver
+    // Build SPI configuration packet (29 bytes total)
     const buff = Buffer.alloc(29);
     buff[0] = CH347_CMD_SPI_SET_CFG;
     buff[1] = (buff.length - 3) & 0xff;         // payload length low byte (26)
     buff[2] = ((buff.length - 3) >> 8) & 0xff;  // payload length high byte (0)
 
-    // Mystery bytes that vendor drivers unconditionally set
+    // Unknown bytes (vendor driver sets these unconditionally)
     buff[5] = 4;
     buff[6] = 1;
 
-    // Clock polarity: bit 1
+    // Clock polarity: 0=idle low, 2=idle high (not 0/1!)
     buff[9] = cpol;
 
-    // Clock phase: bit 0
+    // Clock phase: 0=sample on 1st edge, 1=sample on 2nd edge
     buff[11] = cpha;
 
-    // Another mystery byte
+    // Unknown byte (vendor driver sets this)
     buff[14] = 2;
 
-    // Clock divisor: bits 5:3
+    // Clock divisor: 3-bit value (0-7) in bits 5:3
     buff[15] = (this.config.speed & 0x7) << 3;
 
-    // Bit order: bit 7, 0=MSB, 0x80=LSB
+    // Bit order: 0x00=MSB first, 0x80=LSB first
     buff[17] = this.config.bitOrder === 'LSB' ? 0x80 : 0;
 
-    // Yet another mystery byte
+    // Unknown byte (vendor driver sets this)
     buff[19] = 7;
 
-    // CS polarity: bit 7 = CS2, bit 6 = CS1. 0 = active low
+    // CS polarity: bit 7 = CS1, bit 6 = CS2. 0 = active low
     buff[24] = 0;
 
     await this.usb.write(buff);
