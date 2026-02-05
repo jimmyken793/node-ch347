@@ -30,6 +30,7 @@ jobs:
       run: npm run build
 
     - name: Run tests
+      shell: bash
       run: npm test
 
     - name: Check TypeScript types

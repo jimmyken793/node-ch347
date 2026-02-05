@@ -12,9 +12,9 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "test": "node --test 'dist/**/*.test.js'",
-    "test:hardware": "node --test 'dist/**/*.hwtest.js'",
-    "test:all": "node --test 'dist/**/*.test.js' 'dist/**/*.hwtest.js'",
+    "test": "find dist -name '*.test.js' | xargs node --test",
+    "test:hardware": "find dist -name '*.hwtest.js' | xargs node --test",
+    "test:all": "find dist -name '*.test.js' -o -name '*.hwtest.js' | xargs node --test",
     "prepare": "git config core.hooksPath .githooks",
     "prepublishOnly": "npm run build",
     "example": "node dist/examples/basic.js",
