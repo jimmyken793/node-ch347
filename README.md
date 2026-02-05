@@ -6,7 +6,7 @@
 
 A Node.js library for interfacing with WCH CH347 USB devices. Supports GPIO control and SPI flash programming.
 
-> **Note:** This is an early release (v0.0.1). The API may change in future versions.
+> **Note:** This is an early release (v0.0.4). The API may change in future versions.
 
 ## Features
 
