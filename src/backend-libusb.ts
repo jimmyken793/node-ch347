@@ -10,14 +10,7 @@ import { CH347USB } from './usb';
 import { CH347SPI } from './spi';
 import { CH347GPIO } from './gpio';
 import { SPIConfig, GPIOState, GPIOConfig, CH347DeviceInfo } from './types';
-import { SPISpeed, SPIMode, CH347_PACKET_SIZE } from './constants';
-
-const DEFAULT_SPI_CONFIG: SPIConfig = {
-  speed: SPISpeed.CLK_15M,
-  mode: SPIMode.MODE_0,
-  chipSelect: 0,
-  bitOrder: 'MSB',
-};
+import { DEFAULT_SPI_CONFIG } from './constants';
 
 /**
  * LibUSB-based backend for CH347
@@ -119,8 +112,17 @@ export class LibUSBBackend implements CH347Backend {
       await this.spiInit();
     }
 
-    // Use writeRead for full duplex transfer
-    return this.spi.transfer(writeData);
+    // Handle readLength parameter for consistency with WCHBackend
+    const len = readLength ?? writeData.length;
+    if (len === writeData.length) {
+      return this.spi.transfer(writeData);
+    }
+
+    // If different lengths, pad or truncate
+    const buffer = Buffer.alloc(Math.max(writeData.length, len));
+    writeData.copy(buffer);
+    const result = await this.spi.transfer(buffer);
+    return result.subarray(0, len);
   }
 
   async spiSendCommand(writeData: Buffer, readLength = 0): Promise<Buffer> {

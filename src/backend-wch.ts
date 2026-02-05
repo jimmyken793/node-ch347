@@ -8,14 +8,7 @@
 import { CH347Backend } from './backend';
 import { CH347WCH, isWCHDLLAvailable, loadWCHDLL } from './wch-dll';
 import { SPIConfig, GPIOState, GPIOConfig, CH347DeviceInfo } from './types';
-import { SPISpeed, SPIMode, CH347_GPIO_COUNT, CH347_PACKET_SIZE, CH347_VID, CH347_PID_SPI_I2C_UART } from './constants';
-
-const DEFAULT_SPI_CONFIG: SPIConfig = {
-  speed: SPISpeed.CLK_15M,
-  mode: SPIMode.MODE_0,
-  chipSelect: 0,
-  bitOrder: 'MSB',
-};
+import { CH347_GPIO_COUNT, CH347_MAX_DATA_LEN, CH347_VID, CH347_PID_SPI_I2C_UART, DEFAULT_SPI_CONFIG, delay } from './constants';
 
 /**
  * WCH DLL-based backend for CH347
@@ -156,9 +149,7 @@ export class WCHBackend implements CH347Backend {
 
     // For large reads, chunk using CH347SPI_WriteRead (proven working method)
     // TODO: Investigate CH347SPI_Read for potential performance improvements
-    const MAX_TRANSFER_SIZE = CH347_PACKET_SIZE - 10; // Leave some margin for safety
-
-    if (writeData.length + readLength > MAX_TRANSFER_SIZE) {
+    if (writeData.length + readLength > CH347_MAX_DATA_LEN) {
       // Large read operation - chunk the read portion
       // This happens for data reads (cmd=0x03 or similar with 24-bit address)
       if (writeData.length === 4 && readLength > 0) {
@@ -167,7 +158,7 @@ export class WCHBackend implements CH347Backend {
         const address = (writeData[1] << 16) | (writeData[2] << 8) | writeData[3];
 
         // Chunk the read operation to stay within USB packet size
-        const maxChunk = MAX_TRANSFER_SIZE - 4; // Leave room for command
+        const maxChunk = CH347_MAX_DATA_LEN - 4; // Leave room for command
         const result = Buffer.alloc(readLength);
         let offset = 0;
 
@@ -219,8 +210,8 @@ export class WCHBackend implements CH347Backend {
     cmd[2] = (address >> 8) & 0xff;
     cmd[3] = address & 0xff;
 
-    // For large reads, we need to chunk
-    const maxChunk = CH347_PACKET_SIZE - 4; // Leave room for command
+    // For large reads, we need to chunk (consistent with LibUSBBackend)
+    const maxChunk = CH347_MAX_DATA_LEN;
     const result = Buffer.alloc(length);
     let offset = 0;
 
@@ -283,8 +274,41 @@ export class WCHBackend implements CH347Backend {
   }
 
   async gpioWriteMultiple(pins: { pin: number; value: boolean }[]): Promise<void> {
+    if (!this.wch) {
+      throw new Error('Device not open');
+    }
+
+    // Get current GPIO state
+    const { direction, value: currentValue } = this.wch.gpioGet();
+
+    // Build bitmasks for atomic update
+    let enable = 0;
+    let newDir = direction;
+    let newValue = currentValue;
+
     for (const { pin, value } of pins) {
-      await this.gpioWrite(pin, value);
+      if (pin < 0 || pin >= CH347_GPIO_COUNT) {
+        throw new Error(`Invalid pin number: ${pin}`);
+      }
+      enable |= 1 << pin;
+      newDir |= 1 << pin; // Set as output
+      if (value) {
+        newValue |= 1 << pin;
+      } else {
+        newValue &= ~(1 << pin);
+      }
+    }
+
+    // Single atomic GPIO update
+    this.wch.gpioSet(enable, newDir, newValue);
+
+    // Update cached states
+    for (const { pin, value } of pins) {
+      this.pinStates[pin] = {
+        pin,
+        direction: 'output',
+        value,
+      };
     }
   }
 
@@ -312,18 +336,52 @@ export class WCHBackend implements CH347Backend {
   }
 
   async gpioConfigure(configs: GPIOConfig[]): Promise<void> {
+    if (!this.wch) {
+      throw new Error('Device not open');
+    }
+
+    // Get current GPIO state
+    const { direction, value: currentValue } = this.wch.gpioGet();
+
+    // Build bitmasks for atomic update
+    let enable = 0;
+    let newDir = direction;
+    let newValue = currentValue;
+
     for (const config of configs) {
-      if (config.direction === 'output') {
-        await this.gpioWrite(config.pin, config.value ?? false);
-      } else {
-        await this.gpioSetDirection(config.pin, 'input');
+      if (config.pin < 0 || config.pin >= CH347_GPIO_COUNT) {
+        throw new Error(`Invalid pin number: ${config.pin}`);
       }
+      enable |= 1 << config.pin;
+
+      if (config.direction === 'output') {
+        newDir |= 1 << config.pin;
+        if (config.value) {
+          newValue |= 1 << config.pin;
+        } else {
+          newValue &= ~(1 << config.pin);
+        }
+      } else {
+        newDir &= ~(1 << config.pin);
+      }
+    }
+
+    // Single atomic GPIO update
+    this.wch.gpioSet(enable, newDir, newValue);
+
+    // Update cached states
+    for (const config of configs) {
+      this.pinStates[config.pin] = {
+        pin: config.pin,
+        direction: config.direction,
+        value: config.direction === 'output' ? (config.value ?? false) : this.pinStates[config.pin]?.value ?? false,
+      };
     }
   }
 
   async gpioPulse(pin: number, durationMs = 100, activeHigh = true): Promise<void> {
     await this.gpioWrite(pin, activeHigh);
-    await this.delay(durationMs);
+    await delay(durationMs);
     await this.gpioWrite(pin, !activeHigh);
   }
 
@@ -332,9 +390,5 @@ export class WCHBackend implements CH347Backend {
     const newValue = !state.value;
     await this.gpioWrite(pin, newValue);
     return newValue;
-  }
-
-  private delay(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 }

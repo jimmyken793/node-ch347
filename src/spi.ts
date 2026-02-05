@@ -23,20 +23,11 @@ import {
   CH347_CS_CHANGE,
   CH347_CS_IGNORE,
   CH347_PACKET_SIZE,
-  SPISpeed,
-  SPIMode,
+  DEFAULT_SPI_CONFIG,
 } from './constants';
-import { SPIConfig } from './types';
+import { SPIConfig, SPIInterface } from './types';
 
-// Default SPI configuration
-const DEFAULT_SPI_CONFIG: SPIConfig = {
-  speed: SPISpeed.CLK_15M,
-  mode: SPIMode.MODE_0,
-  chipSelect: 0,
-  bitOrder: 'MSB',
-};
-
-export class CH347SPI {
+export class CH347SPI implements SPIInterface {
   private usb: CH347USB;
   private config: SPIConfig;
   private isInitialized = false;

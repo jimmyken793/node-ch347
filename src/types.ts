@@ -42,6 +42,24 @@ export interface SPIConfig {
   bitOrder: 'MSB' | 'LSB';
 }
 
+/**
+ * SPI interface for flash operations
+ * This interface is implemented by CH347SPI and backend adapters
+ */
+export interface SPIInterface {
+  init(config?: Partial<SPIConfig>): Promise<void>;
+  sendCommand(writeData: Buffer, readLength?: number): Promise<Buffer>;
+  command(writeData: Buffer, readLength?: number): Promise<Buffer>;
+  transfer(data: Buffer): Promise<Buffer>;
+  write(data: Buffer): Promise<void>;
+  read(length: number): Promise<Buffer>;
+  writeRead(data: Buffer): Promise<Buffer>;
+  setChipSelect(active: boolean): Promise<void>;
+  csControl(cs1: number, cs2?: number): Promise<void>;
+  getConfig(): SPIConfig;
+  isReady(): boolean;
+}
+
 export interface EraseType {
   command: number;    // Erase command (e.g., 0x20, 0x52, 0xd8)
   size: number;       // Erase size in bytes

@@ -40,7 +40,6 @@ import { CH347Backend } from './backend';
 import { LibUSBBackend } from './backend-libusb';
 import { WCHBackend } from './backend-wch';
 import { CH347Flash } from './flash';
-import { CH347SPI } from './spi';
 import { isWCHDLLAvailable } from './wch-dll';
 import { getWindowsBackend } from './usb';
 import {
@@ -50,6 +49,7 @@ import {
 import {
   CH347DeviceInfo,
   SPIConfig,
+  SPIInterface,
   FlashInfo,
   FlashProgress,
   GPIOState,
@@ -142,12 +142,12 @@ export class CH347Device {
   }
 
   /**
-   * Create a CH347SPI-compatible adapter for the Flash class
+   * Create an SPI adapter for the Flash class
    */
-  private createSPIAdapter(): CH347SPI {
+  private createSPIAdapter(): SPIInterface {
     const backend = this.backend!;
 
-    // Create an object that implements the CH347SPI interface
+    // Create an object that implements SPIInterface
     // This allows CH347Flash to work with any backend
     return {
       init: async (config?: Partial<SPIConfig>) => backend.spiInit(config),
@@ -163,7 +163,7 @@ export class CH347Device {
       csControl: async (_cs1: number, _cs2?: number) => { /* handled internally */ },
       getConfig: () => backend.spiGetConfig(),
       isReady: () => backend.spiIsInitialized(),
-    } as unknown as CH347SPI;
+    };
   }
 
   /**

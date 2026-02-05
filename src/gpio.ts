@@ -19,6 +19,7 @@ import {
   GPIO_PIN_VALUE_HIGH,
   GPIO_PIN_IS_OUTPUT,
   GPIO_PIN_VALUE,
+  delay,
 } from './constants';
 import { GPIOConfig, GPIOState } from './types';
 
@@ -208,7 +209,7 @@ export class CH347GPIO {
    */
   async pulse(pin: number, durationMs: number = 100, activeHigh: boolean = true): Promise<void> {
     await this.write(pin, activeHigh);
-    await this.delay(durationMs);
+    await delay(durationMs);
     await this.write(pin, !activeHigh);
   }
 
@@ -227,9 +228,5 @@ export class CH347GPIO {
    */
   getPinStates(): GPIOState[] {
     return [...this.pinStates];
-  }
-
-  private delay(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 }

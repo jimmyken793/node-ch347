@@ -117,3 +117,16 @@ export const FLASH_BLOCK_SIZE_64K = 65536;
 // The CH347 UART appears as a virtual COM port
 export const CH347_UART_DEFAULT_BAUD = 115200;
 
+// Default SPI configuration
+export const DEFAULT_SPI_CONFIG = {
+  speed: SPISpeed.CLK_15M,
+  mode: SPIMode.MODE_0,
+  chipSelect: 0 as 0 | 1,
+  bitOrder: 'MSB' as 'MSB' | 'LSB',
+};
+
+// Utility function for async delay
+export function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+

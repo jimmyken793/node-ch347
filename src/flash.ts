@@ -5,7 +5,6 @@
  */
 
 import * as fs from 'fs/promises';
-import { CH347SPI } from './spi';
 import {
   FLASH_CMD_WRITE_ENABLE,
   FLASH_CMD_WRITE_DISABLE,
@@ -31,6 +30,7 @@ import {
   FlashProgressCallback,
   FlashManufacturers,
   FlashDatabase,
+  SPIInterface,
 } from './types';
 import { on } from 'events';
 
@@ -38,10 +38,10 @@ const DEFAULT_TIMEOUT_MS = 30000; // 30 seconds for chip erase
 const POLL_INTERVAL_MS = 1; // 1ms polling
 
 export class CH347Flash {
-  private spi: CH347SPI;
+  private spi: SPIInterface;
   private flashInfo: FlashInfo | null = null;
 
-  constructor(spi: CH347SPI) {
+  constructor(spi: SPIInterface) {
     this.spi = spi;
   }
 
