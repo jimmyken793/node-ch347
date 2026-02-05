@@ -1,5 +1,6 @@
 # node-ch347
 
+[![CI](https://github.com/jimmyken793/node-ch347/actions/workflows/ci.yml/badge.svg)](https://github.com/jimmyken793/node-ch347/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/node-ch347.svg)](https://www.npmjs.com/package/node-ch347)
 [![npm downloads](https://img.shields.io/npm/dm/node-ch347.svg)](https://www.npmjs.com/package/node-ch347)
 [![license](https://img.shields.io/npm/l/node-ch347.svg)](https://github.com/jimmyken793/node-ch347/blob/main/LICENSE)
