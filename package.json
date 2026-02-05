@@ -12,7 +12,10 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "test": "node --test dist/**/*.test.js",
+    "test": "node --test 'dist/**/*.test.js'",
+    "test:hardware": "node --test 'dist/**/*.hwtest.js'",
+    "test:all": "node --test 'dist/**/*.test.js' 'dist/**/*.hwtest.js'",
+    "prepare": "git config core.hooksPath .githooks",
     "prepublishOnly": "npm run build",
     "example": "node dist/examples/basic.js",
     "test:wch-dll": "node dist/examples/test-wch-dll.js",

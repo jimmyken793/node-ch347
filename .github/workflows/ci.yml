@@ -31,7 +31,6 @@ jobs:
 
     - name: Run tests
       run: npm test
-      continue-on-error: true  # Tests may fail without physical hardware
 
     - name: Check TypeScript types
       run: npx tsc --noEmit
