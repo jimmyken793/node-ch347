@@ -314,6 +314,25 @@ The CH347 is a USB 2.0 high-speed (480 Mbps) bus converter chip by WCH (Nanjing 
 - GPIO6: CTS1
 - GPIO7: RTS1
 
+## Development
+
+### Git Hooks Setup
+
+This project uses git hooks for pre-push validation. To enable them:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+The pre-push hook runs:
+- Build (`npm run build`)
+- Tests (`npm test`)
+- Type checking (`npx tsc --noEmit`)
+
+### Claude Code Integration
+
+If you have Claude Code installed, the pre-push hook will automatically run `/check-style` to analyze code for API consistency and style issues. This is optional and non-blocking.
+
 ## Disclaimer
 
 This project was developed with AI-assisted code generation. Not all functions have been fully tested. Use at your own risk.
