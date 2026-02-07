@@ -31,7 +31,7 @@ export class LibUSBBackend implements CH347Backend {
   /**
    * List all connected CH347 devices
    */
-  static listDevices(): CH347DeviceInfo[] {
+  static async listDevices(): Promise<CH347DeviceInfo[]> {
     return CH347USB.listDevices();
   }
 
@@ -62,7 +62,7 @@ export class LibUSBBackend implements CH347Backend {
     this._spiInitialized = true;
   }
 
-  close(): void {
+  async close(): Promise<void> {
     if (this.usb) {
       this.usb.close();
       this.usb = null;

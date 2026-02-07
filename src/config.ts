@@ -42,7 +42,7 @@ function shouldUseWCHBackend(): boolean {
 export async function listDevicesWithSerial(): Promise<CH347DeviceWithSerial[]> {
   // Use WCH backend if selected (serial numbers not available)
   if (shouldUseWCHBackend()) {
-    const wchDevices = WCHBackend.listDevices();
+    const wchDevices = await WCHBackend.listDevices();
     return wchDevices.map((device, index) => ({
       index,
       vendorId: device.vendorId,

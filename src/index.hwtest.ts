@@ -25,8 +25,8 @@ describe('CH347 Hardware Tests', () => {
       assert.strictEqual(device.isConnected(), true);
     });
 
-    it('should list at least one device', () => {
-      const devices = CH347Device.listDevices();
+    it('should list at least one device', async () => {
+      const devices = await CH347Device.listDevices();
       assert.ok(devices.length > 0, 'No CH347 devices found');
     });
   });

@@ -15,7 +15,6 @@ import {
   SPISpeed,
   FlashManufacturers,
   isWCHDLLAvailable,
-  CH347WCH,
 } from '../index';
 
 async function main() {
@@ -52,12 +51,7 @@ async function main() {
   }
 
   // Check for devices
-  let deviceCount = 0;
-  if (useWCHBackend) {
-    deviceCount = CH347WCH.listDevices().length;
-  } else {
-    deviceCount = CH347Device.listDevices().length;
-  }
+  const deviceCount = (await CH347Device.listDevices()).length;
 
   if (deviceCount === 0) {
     console.error('Error: No CH347 devices found!');
@@ -136,7 +130,7 @@ async function main() {
     console.error('Error:', error instanceof Error ? error.message : error);
     process.exit(1);
   } finally {
-    device.close();
+    await device.close();
   }
 
   process.exit(0);

@@ -9,7 +9,6 @@ import CH347Device, {
   SPISpeed,
   SPIMode,
   isWCHDLLAvailable,
-  CH347WCH,
 } from '../index';
 
 async function main() {
@@ -28,24 +27,13 @@ async function main() {
   // List available devices
   console.log('Scanning for CH347 devices...');
 
-  let deviceCount = 0;
-  if (useWCHBackend) {
-    // Use WCH DLL to list devices
-    const devices = CH347WCH.listDevices();
-    deviceCount = devices.length;
-    if (devices.length > 0) {
-      console.log(`Found ${devices.length} device(s): indices ${devices.join(', ')}`);
-    }
-  } else {
-    // Use libusb to list devices
-    const devices = CH347Device.listDevices();
-    deviceCount = devices.length;
-    if (devices.length > 0) {
-      console.log(`Found ${devices.length} device(s):`);
-      devices.forEach((dev, i) => {
-        console.log(`  [${i}] VID:${dev.vendorId.toString(16)} PID:${dev.productId.toString(16)} ${dev.product || ''}`);
-      });
-    }
+  const devices = await CH347Device.listDevices();
+  const deviceCount = devices.length;
+  if (devices.length > 0) {
+    console.log(`Found ${devices.length} device(s):`);
+    devices.forEach((dev, i) => {
+      console.log(`  [${i}] VID:${dev.vendorId.toString(16)} PID:${dev.productId.toString(16)} ${dev.product || ''}`);
+    });
   }
 
   if (deviceCount === 0) {
@@ -162,12 +150,12 @@ async function main() {
     console.log('Power disabled');
 
     // Close device
-    ch347.close();
+    await ch347.close();
     console.log('Device closed');
 
   } catch (error) {
     console.error('Error:', error);
-    ch347.close();
+    await ch347.close();
   }
 }
 

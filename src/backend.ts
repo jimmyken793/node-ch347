@@ -22,7 +22,7 @@ export interface CH347Backend {
   /**
    * Close connection
    */
-  close(): void;
+  close(): Promise<void>;
 
   /**
    * Check if device is connected
@@ -118,7 +118,7 @@ export interface CH347BackendStatic {
   /**
    * List all connected CH347 devices
    */
-  listDevices(): CH347DeviceInfo[];
+  listDevices(): Promise<CH347DeviceInfo[]>;
 
   /**
    * Check if the backend is available

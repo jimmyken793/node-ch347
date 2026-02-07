@@ -81,13 +81,13 @@ async function main() {
 
     // Close device
     console.log('Closing device...');
-    device.close();
+    await device.close();
     console.log('Device closed.\n');
 
     console.log('=== Test completed successfully! ===');
   } catch (err) {
     console.error('Error:', err);
-    device.close();
+    await device.close();
     process.exit(1);
   }
 }

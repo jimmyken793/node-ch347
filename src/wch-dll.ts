@@ -21,6 +21,20 @@ import { SPISpeed, SPIMode } from './constants';
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let koffi: any = null;
 
+/**
+ * Call a koffi function asynchronously (runs on worker thread)
+ * Converts callback-style async to Promise
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function callAsync<T>(fn: any, ...args: any[]): Promise<T> {
+  return new Promise((resolve, reject) => {
+    fn.async(...args, (err: Error | null, result: T) => {
+      if (err) reject(err);
+      else resolve(result);
+    });
+  });
+}
+
 // Unified interface for DLL functions
 interface WCHFunctions {
   CH347OpenDevice: (deviceIndex: number) => number;
@@ -140,23 +154,37 @@ export function isWCHDLLAvailable(): boolean {
 export class CH347WCH {
   private deviceIndex: number = -1;
   private isOpen = false;
+  private pending: Promise<void> = Promise.resolve();
+
+  /**
+   * Serialize DLL calls to prevent concurrent access
+   * WCH DLL may not be thread-safe, so we queue all operations
+   */
+  private serialize<T>(fn: () => Promise<T>): Promise<T> {
+    const result = this.pending.then(fn);
+    this.pending = result.then(
+      () => {},
+      () => {}
+    );
+    return result;
+  }
 
   /**
    * List available CH347 devices
    * Note: WCH DLL doesn't have a proper enumeration function,
    * so we try to open devices 0-15 to check availability
    */
-  static listDevices(): number[] {
+  static async listDevices(): Promise<number[]> {
     if (!loadWCHDLL()) {
       throw dllLoadError;
     }
 
     const devices: number[] = [];
     for (let i = 0; i < 16; i++) {
-      const handle = wchLib!.CH347OpenDevice(i);
+      const handle = await callAsync<number>(wchLib!.CH347OpenDevice, i);
       if (handle !== -1) {
         devices.push(i);
-        wchLib!.CH347CloseDevice(i);
+        await callAsync<void>(wchLib!.CH347CloseDevice, i);
       }
     }
     return devices;
@@ -165,12 +193,12 @@ export class CH347WCH {
   /**
    * Open connection to CH347 device
    */
-  open(deviceIndex = 0): void {
+  async open(deviceIndex = 0): Promise<void> {
     if (!loadWCHDLL()) {
       throw dllLoadError;
     }
 
-    const handle = wchLib!.CH347OpenDevice(deviceIndex);
+    const handle = await callAsync<number>(wchLib!.CH347OpenDevice, deviceIndex);
     if (handle === -1) {
       throw new Error(`Failed to open CH347 device ${deviceIndex}`);
     }
@@ -182,9 +210,9 @@ export class CH347WCH {
   /**
    * Close connection
    */
-  close(): void {
+  async close(): Promise<void> {
     if (this.isOpen && this.deviceIndex >= 0) {
-      wchLib!.CH347CloseDevice(this.deviceIndex);
+      await callAsync<void>(wchLib!.CH347CloseDevice, this.deviceIndex);
       this.isOpen = false;
       this.deviceIndex = -1;
     }
@@ -200,7 +228,7 @@ export class CH347WCH {
   /**
    * Initialize SPI interface
    */
-  spiInit(config?: Partial<SPIConfig>): void {
+  async spiInit(config?: Partial<SPIConfig>): Promise<void> {
     if (!this.isOpen) {
       throw new Error('Device not open');
     }
@@ -257,7 +285,9 @@ export class CH347WCH {
     // iDelayDeactive
     cfgBuffer.writeUInt32LE(0, offset);
 
-    const result = wchLib!.CH347SPI_Init(this.deviceIndex, cfgBuffer);
+    const result = await this.serialize(() =>
+      callAsync<number>(wchLib!.CH347SPI_Init, this.deviceIndex, cfgBuffer)
+    );
     if (result === 0) {
       throw new Error('Failed to initialize SPI');
     }
@@ -266,7 +296,7 @@ export class CH347WCH {
   /**
    * SPI write and read
    */
-  spiTransfer(writeData: Buffer): Buffer {
+  async spiTransfer(writeData: Buffer): Promise<Buffer> {
     if (!this.isOpen) {
       throw new Error('Device not open');
     }
@@ -279,11 +309,14 @@ export class CH347WCH {
       console.log(`[WCH] spiTransfer: deviceIndex=${this.deviceIndex}, len=${writeData.length}, data=${writeData.subarray(0, Math.min(8, writeData.length)).toString('hex')}...`);
     }
 
-    const result = wchLib!.CH347SPI_WriteRead(
-      this.deviceIndex,
-      0x80, // CS0 active
-      writeData.length,
-      ioBuffer
+    const result = await this.serialize(() =>
+      callAsync<number>(
+        wchLib!.CH347SPI_WriteRead,
+        this.deviceIndex,
+        0x80, // CS0 active
+        writeData.length,
+        ioBuffer
+      )
     );
 
     if (debug) {
@@ -300,7 +333,7 @@ export class CH347WCH {
   /**
    * SPI write only (uses CH347SPI_WriteRead internally)
    */
-  spiWrite(data: Buffer): void {
+  async spiWrite(data: Buffer): Promise<void> {
     if (!this.isOpen) {
       throw new Error('Device not open');
     }
@@ -314,11 +347,14 @@ export class CH347WCH {
       console.log(`[WCH] spiWrite: deviceIndex=${this.deviceIndex}, len=${data.length}, data=${data.subarray(0, Math.min(8, data.length)).toString('hex')}...`);
     }
 
-    const result = wchLib!.CH347SPI_WriteRead(
-      this.deviceIndex,
-      0x80, // CS0 active (bit 7 set)
-      data.length, // Actual data length to write
-      buffer
+    const result = await this.serialize(() =>
+      callAsync<number>(
+        wchLib!.CH347SPI_WriteRead,
+        this.deviceIndex,
+        0x80, // CS0 active (bit 7 set)
+        data.length, // Actual data length to write
+        buffer
+      )
     );
 
     if (debug) {
@@ -333,7 +369,7 @@ export class CH347WCH {
   /**
    * SPI read only (not used directly, see spiReadWithCommand)
    */
-  spiRead(length: number): Buffer {
+  async spiRead(length: number): Promise<Buffer> {
     if (!this.isOpen) {
       throw new Error('Device not open');
     }
@@ -341,12 +377,15 @@ export class CH347WCH {
     const readBuffer = Buffer.alloc(length);
     const lengthPtr = new Uint32Array([length]);
 
-    const result = wchLib!.CH347SPI_Read(
-      this.deviceIndex,
-      0x80, // CS0 active
-      0, // No command bytes
-      lengthPtr,
-      readBuffer
+    const result = await this.serialize(() =>
+      callAsync<number>(
+        wchLib!.CH347SPI_Read,
+        this.deviceIndex,
+        0x80, // CS0 active
+        0, // No command bytes
+        lengthPtr,
+        readBuffer
+      )
     );
 
     if (result === 0) {
@@ -368,7 +407,7 @@ export class CH347WCH {
    * @param readLength Number of bytes to read after the command
    * @returns Data read from device
    */
-  spiReadWithCommand(command: Buffer, readLength: number): Buffer {
+  async spiReadWithCommand(command: Buffer, readLength: number): Promise<Buffer> {
     if (!this.isOpen) {
       throw new Error('Device not open');
     }
@@ -395,12 +434,15 @@ export class CH347WCH {
     // - oLength: command length (number of bytes to send)
     // - iLength: pointer to read length (input: bytes to read, output: bytes actually read)
     // - ioBuffer: contains command, receives data
-    const result = wchLib!.CH347SPI_Read(
-      this.deviceIndex,
-      0x80, // CS0 active
-      command.length, // Command length (e.g., 4 for read command + 3-byte address)
-      readLengthPtr, // Pointer to read length (passed by reference)
-      ioBuffer
+    const result = await this.serialize(() =>
+      callAsync<number>(
+        wchLib!.CH347SPI_Read,
+        this.deviceIndex,
+        0x80, // CS0 active
+        command.length, // Command length (e.g., 4 for read command + 3-byte address)
+        readLengthPtr, // Pointer to read length (passed by reference)
+        ioBuffer
+      )
     );
 
     if (debug) {
@@ -425,17 +467,20 @@ export class CH347WCH {
   /**
    * Control chip select
    */
-  setChipSelect(active: boolean, csIndex: 0 | 1 = 0): void {
+  async setChipSelect(active: boolean, csIndex: 0 | 1 = 0): Promise<void> {
     if (!this.isOpen) {
       throw new Error('Device not open');
     }
 
-    const result = wchLib!.CH347SPI_SetChipSelect(
-      this.deviceIndex,
-      1, // Enable
-      csIndex,
-      active ? 0 : 1, // Idle state
-      active ? 1 : 0 // Active state
+    const result = await this.serialize(() =>
+      callAsync<number>(
+        wchLib!.CH347SPI_SetChipSelect,
+        this.deviceIndex,
+        1, // Enable
+        csIndex,
+        active ? 0 : 1, // Idle state
+        active ? 1 : 0 // Active state
+      )
     );
 
     if (result === 0) {
@@ -446,16 +491,19 @@ export class CH347WCH {
   /**
    * Set GPIO pins
    */
-  gpioSet(enable: number, direction: number, value: number): void {
+  async gpioSet(enable: number, direction: number, value: number): Promise<void> {
     if (!this.isOpen) {
       throw new Error('Device not open');
     }
 
-    const result = wchLib!.CH347GPIO_Set(
-      this.deviceIndex,
-      enable,
-      direction,
-      value
+    const result = await this.serialize(() =>
+      callAsync<number>(
+        wchLib!.CH347GPIO_Set,
+        this.deviceIndex,
+        enable,
+        direction,
+        value
+      )
     );
 
     if (result === 0) {
@@ -466,7 +514,7 @@ export class CH347WCH {
   /**
    * Get GPIO state
    */
-  gpioGet(): { direction: number; value: number } {
+  async gpioGet(): Promise<{ direction: number; value: number }> {
     if (!this.isOpen) {
       throw new Error('Device not open');
     }
@@ -474,10 +522,13 @@ export class CH347WCH {
     const dirBuffer = Buffer.alloc(1);
     const dataBuffer = Buffer.alloc(1);
 
-    const result = wchLib!.CH347GPIO_Get(
-      this.deviceIndex,
-      dirBuffer,
-      dataBuffer
+    const result = await this.serialize(() =>
+      callAsync<number>(
+        wchLib!.CH347GPIO_Get,
+        this.deviceIndex,
+        dirBuffer,
+        dataBuffer
+      )
     );
 
     if (result === 0) {
@@ -493,8 +544,8 @@ export class CH347WCH {
   /**
    * Read all GPIO states (compatible with CH347GPIO interface)
    */
-  gpioReadAll(): GPIOState[] {
-    const { direction, value } = this.gpioGet();
+  async gpioReadAll(): Promise<GPIOState[]> {
+    const { direction, value } = await this.gpioGet();
     const states: GPIOState[] = [];
 
     for (let pin = 0; pin < 8; pin++) {
@@ -511,28 +562,28 @@ export class CH347WCH {
   /**
    * Write GPIO pin
    */
-  gpioWrite(pin: number, pinValue: boolean): void {
+  async gpioWrite(pin: number, pinValue: boolean): Promise<void> {
     if (pin < 0 || pin > 7) {
       throw new Error('Pin must be 0-7');
     }
 
-    const { direction, value } = this.gpioGet();
+    const { direction, value } = await this.gpioGet();
     const enable = 1 << pin;
     const newDir = direction | (1 << pin); // Set as output
     const newValue = pinValue ? (value | (1 << pin)) : (value & ~(1 << pin));
 
-    this.gpioSet(enable, newDir, newValue);
+    await this.gpioSet(enable, newDir, newValue);
   }
 
   /**
    * Read GPIO pin
    */
-  gpioRead(pin: number): GPIOState {
+  async gpioRead(pin: number): Promise<GPIOState> {
     if (pin < 0 || pin > 7) {
       throw new Error('Pin must be 0-7');
     }
 
-    const { direction, value } = this.gpioGet();
+    const { direction, value } = await this.gpioGet();
 
     return {
       pin,

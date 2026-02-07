@@ -6,7 +6,7 @@
  */
 
 import * as readline from 'readline';
-import CH347Device, { isWCHDLLAvailable, CH347WCH } from '../index';
+import CH347Device, { isWCHDLLAvailable } from '../index';
 
 const GPIO_NAMES: Record<number, string> = {
   0: 'GPIO0',
@@ -45,12 +45,7 @@ async function main() {
   console.log('');
 
   // Find devices
-  let deviceCount = 0;
-  if (useWCHBackend) {
-    deviceCount = CH347WCH.listDevices().length;
-  } else {
-    deviceCount = CH347Device.listDevices().length;
-  }
+  const deviceCount = (await CH347Device.listDevices()).length;
 
   if (deviceCount === 0) {
     console.log('No CH347 devices found!');
@@ -151,7 +146,7 @@ async function main() {
           case 'quit':
           case 'exit':
             console.log('Closing device...');
-            ch347.close();
+            await ch347.close();
             rl.close();
             process.exit(0);
             return;

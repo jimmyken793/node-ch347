@@ -10,7 +10,7 @@
  *   npx ts-node src/examples/serial-number.ts
  */
 
-import CH347Device, { isWCHDLLAvailable, CH347WCH } from '../index';
+import CH347Device, { isWCHDLLAvailable } from '../index';
 
 async function listDevices() {
   const isWindows = process.platform === 'win32';
@@ -24,20 +24,21 @@ async function listDevices() {
   console.log('');
 
   if (useWCHBackend) {
-    // WCH backend - limited device info
-    const devices = CH347WCH.listDevices();
+    // WCH backend - limited device info (serial numbers not available)
+    const devices = await CH347Device.listDevices();
     if (devices.length === 0) {
       console.log('No CH347 devices found.');
       return;
     }
 
     console.log(`Found ${devices.length} device(s):\n`);
-    for (const index of devices) {
+    devices.forEach((dev, index) => {
       console.log(`Device ${index}:`);
-      console.log(`  Index: ${index}`);
+      console.log(`  VID: 0x${dev.vendorId.toString(16).padStart(4, '0')}`);
+      console.log(`  PID: 0x${dev.productId.toString(16).padStart(4, '0')}`);
       console.log(`  Serial Number: (not available with WCH backend)`);
       console.log('');
-    }
+    });
 
     console.log('Note: Use Device Manager on Windows to view device serial numbers.');
   } else {

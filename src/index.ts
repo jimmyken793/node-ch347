@@ -109,8 +109,8 @@ export class CH347Device {
    * List all connected CH347 devices
    * Respects the current backend selection on Windows.
    */
-  static listDevices(): CH347DeviceInfo[] {
-    return getActiveBackendClass().listDevices();
+  static async listDevices(): Promise<CH347DeviceInfo[]> {
+    return await getActiveBackendClass().listDevices();
   }
 
   /**
@@ -169,9 +169,9 @@ export class CH347Device {
   /**
    * Close connection
    */
-  close(): void {
+  async close(): Promise<void> {
     if (this.backend) {
-      this.backend.close();
+      await this.backend.close();
       this.backend = null;
     }
     this._flash = null;

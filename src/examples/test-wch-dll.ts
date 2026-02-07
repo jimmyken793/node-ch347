@@ -17,12 +17,8 @@
  *   node dist/examples/test-wch-dll.js
  */
 
-import {
-  isWCHDLLAvailable,
-  loadWCHDLL,
-  getWCHDLLError,
-  CH347WCH,
-} from '../wch-dll';
+import { CH347Device } from '../index';
+import { isWCHDLLAvailable, getWCHDLLError } from '../wch-dll';
 
 async function main() {
   console.log('=== WCH DLL Backend Test ===\n');
@@ -38,8 +34,7 @@ async function main() {
   // Step 1: Check if DLL is available
   console.log('Step 1: Checking WCH DLL availability...');
 
-  const loaded = loadWCHDLL();
-  if (!loaded) {
+  if (!isWCHDLLAvailable()) {
     const error = getWCHDLLError();
     console.error('Failed to load WCH DLL:', error?.message);
     console.log('\nTo fix this:');
@@ -53,12 +48,15 @@ async function main() {
 
   console.log('WCH DLL loaded successfully!\n');
 
-  // Step 2: List devices
+  // Step 2: List devices using the common interface
   console.log('Step 2: Listing connected CH347 devices...');
 
+  // Create device with WCH backend
+  const device = new CH347Device({ backend: 'wch' });
+
   try {
-    const devices = CH347WCH.listDevices();
-    console.log(`Found ${devices.length} device(s): ${devices.join(', ') || 'none'}\n`);
+    const devices = await CH347Device.listDevices();
+    console.log(`Found ${devices.length} device(s)\n`);
 
     if (devices.length === 0) {
       console.log('No CH347 devices found.');
@@ -66,17 +64,15 @@ async function main() {
       process.exit(0);
     }
 
-    // Step 3: Open first device and test basic operations
+    // Step 3: Open first device
     console.log('Step 3: Opening device 0...');
-
-    const device = new CH347WCH();
-    device.open(0);
+    await device.open(0);
     console.log('Device opened successfully!\n');
 
     // Test GPIO read
     console.log('Step 4: Reading GPIO states...');
     try {
-      const gpioStates = device.gpioReadAll();
+      const gpioStates = await device.gpioReadAll();
       console.log('GPIO States:');
       for (const state of gpioStates) {
         console.log(`  GPIO${state.pin}: ${state.direction} = ${state.value ? 'HIGH' : 'LOW'}`);
@@ -86,16 +82,13 @@ async function main() {
       console.error('GPIO read failed:', err);
     }
 
-    // Test SPI init
-    console.log('Step 5: Initializing SPI...');
+    // SPI is auto-initialized on open, test transfer
+    console.log('Step 5: Testing SPI...');
     try {
-      device.spiInit({ speed: 2, mode: 0 }); // 15MHz, Mode 0
-      console.log('SPI initialized successfully!\n');
-
       // Try reading JEDEC ID (common flash command)
       console.log('Step 6: Attempting to read SPI flash JEDEC ID...');
       const jedecCmd = Buffer.from([0x9f, 0, 0, 0]);
-      const response = device.spiTransfer(jedecCmd);
+      const response = await device.spiTransfer(jedecCmd);
       const manufacturerId = response[1];
       const memoryType = response[2];
       const capacity = response[3];
@@ -116,7 +109,7 @@ async function main() {
 
     // Close device
     console.log('Step 7: Closing device...');
-    device.close();
+    await device.close();
     console.log('Device closed.\n');
 
     console.log('=== All tests completed successfully! ===');
