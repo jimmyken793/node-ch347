@@ -134,15 +134,10 @@ export class WCHBackend implements CH347Backend {
       throw new Error('Device not open');
     }
 
-    // Reference: WCH SPI_Flash.cpp uses three different DLL functions:
-    // - CH347SPI_WriteRead: Short commands with response (JEDEC ID, status read, WREN, etc.)
-    // - CH347SPI_Write: Page program operations (bulk write)
-    // - CH347SPI_Read: Bulk data reads from flash
-    //
-    // This matches the official WCH implementation pattern for optimal performance.
+    // All SPI operations use CH347SPI_WriteRead internally
 
     if (readLength === 0 && writeData.length > 4) {
-      // Page program operation - use CH347SPI_Write for optimal performance
+      // Page program operation
       this.wch.spiWrite(writeData);
       return Buffer.alloc(0);
     }

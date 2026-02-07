@@ -298,24 +298,7 @@ export class CH347WCH {
   }
 
   /**
-   * SPI write only
-   * Reference: WCH SPI_Flash.cpp
-   *
-   * Used for all write-only commands:
-   * - Short commands: WREN (0x06), WRDI (0x04), erase commands
-   * - Page program: 0x02 + addr + data (up to 260 bytes)
-   *
-   * From WCH SPI_Flash.cpp W25XXX_WR_Page:
-   *   UCHAR buf[8*1024] = {0};
-   *   buf[0] = W25X_PAGE_PROG;
-   *   buf[1..3] = address;
-   *   memcpy(&buf[4], pBuf, Len);
-   *   return CH347SPI_Write(iIndex, 0x80, 4 + Len, 260, buf);
-   *
-   * From WCH SPI_Flash.cpp FlashWREN (write enable):
-   *   buf[0] = CMD_WREN;
-   *   return CH347SPI_WriteRead(iIndex, 0x80, 1, buf);
-   *   // Note: Reference uses WriteRead for 1-byte WREN, but Write should also work
+   * SPI write only (uses CH347SPI_WriteRead internally)
    */
   spiWrite(data: Buffer): void {
     if (!this.isOpen) {
@@ -324,26 +307,17 @@ export class CH347WCH {
 
     const debug = process.env.DEBUG_WCH === '1';
 
-    // writeStep hint for chunking large transfers
-    // For page program: 260 = page size (256) + cmd/addr (4)
-    // For short commands: use data length as step
-    const SPI_FLASH_PAGE_STEP = 260;
-    const writeStep = data.length > 4 ? SPI_FLASH_PAGE_STEP : data.length;
-
-    // Reference uses 8KB buffer, but for short commands we can use smaller buffer
-    const bufferSize = Math.max(data.length, SPI_FLASH_PAGE_STEP);
-    const buffer = Buffer.alloc(bufferSize);
+    const buffer = Buffer.alloc(data.length);
     data.copy(buffer);
 
     if (debug) {
-      console.log(`[WCH] spiWrite: deviceIndex=${this.deviceIndex}, len=${data.length}, writeStep=${writeStep}, data=${data.subarray(0, Math.min(8, data.length)).toString('hex')}...`);
+      console.log(`[WCH] spiWrite: deviceIndex=${this.deviceIndex}, len=${data.length}, data=${data.subarray(0, Math.min(8, data.length)).toString('hex')}...`);
     }
 
-    const result = wchLib!.CH347SPI_Write(
+    const result = wchLib!.CH347SPI_WriteRead(
       this.deviceIndex,
       0x80, // CS0 active (bit 7 set)
       data.length, // Actual data length to write
-      writeStep,
       buffer
     );
 
