@@ -65,7 +65,7 @@ export const CH347_CS_DEASSERT = 0x40;
 export const CH347_CS_CHANGE = 0x80;
 export const CH347_CS_IGNORE = 0x00;
 
-// SPI Clock Speeds (divisor values)
+// SPI Clock Speeds (divisor values for CH347SPI_Init iClock parameter)
 export enum SPISpeed {
   CLK_60M = 0,
   CLK_30M = 1,
@@ -76,6 +76,48 @@ export enum SPISpeed {
   CLK_937_5K = 6,
   CLK_468_75K = 7,
 }
+
+/**
+ * SPI Frequency values in Hz for use with CH347SPI_SetFrequency
+ * The DLL will automatically select the nearest supported frequency.
+ */
+export const SPIFrequency = {
+  // High speed
+  F_60MHz: 60_000_000,
+  F_48MHz: 48_000_000,
+  F_36MHz: 36_000_000,
+  F_30MHz: 30_000_000,
+  F_28MHz: 28_000_000,
+  F_24MHz: 24_000_000,
+  F_18MHz: 18_000_000,
+  F_15MHz: 15_000_000,
+  F_14MHz: 14_000_000,
+  F_12MHz: 12_000_000,
+  F_9MHz: 9_000_000,
+  // Medium speed
+  F_7_5MHz: 7_500_000,
+  F_7MHz: 7_000_000,
+  F_6MHz: 6_000_000,
+  F_4_5MHz: 4_500_000,
+  F_3_75MHz: 3_750_000,
+  F_3_5MHz: 3_500_000,
+  F_3MHz: 3_000_000,
+  F_2_25MHz: 2_250_000,
+  F_1_875MHz: 1_875_000,
+  F_1_75MHz: 1_750_000,
+  F_1_5MHz: 1_500_000,
+  F_1_125MHz: 1_125_000,
+  // Low speed
+  F_937_5KHz: 937_500,
+  F_875KHz: 875_000,
+  F_750KHz: 750_000,
+  F_562_5KHz: 562_500,
+  F_468_75KHz: 468_750,
+  F_437_5KHz: 437_500,
+  F_375KHz: 375_000,
+  F_281_25KHz: 281_250,
+  F_218_75KHz: 218_750,
+} as const;
 
 // SPI Modes
 export enum SPIMode {

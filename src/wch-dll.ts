@@ -78,6 +78,7 @@ interface WCHFunctions {
     dirBuffer: Buffer | Uint8Array,
     dataBuffer: Buffer | Uint8Array
   ) => number;
+  CH347SPI_SetFrequency: (deviceIndex: number, spiSpeedHz: number) => number;
 }
 
 let wchLib: WCHFunctions | null = null;
@@ -117,6 +118,7 @@ export function loadWCHDLL(): boolean {
         CH347SPI_WriteRead: lib.func('int CH347SPI_WriteRead(int, int, int, void*)'),
         CH347GPIO_Set: lib.func('int CH347GPIO_Set(int, int, int, int)'),
         CH347GPIO_Get: lib.func('int CH347GPIO_Get(int, void*, void*)'),
+        CH347SPI_SetFrequency: lib.func('int CH347SPI_SetFrequency(int, int)'),
       };
 
       dllLoaded = true;
@@ -155,6 +157,7 @@ export class CH347WCH {
   private deviceIndex: number = -1;
   private isOpen = false;
   private pending: Promise<void> = Promise.resolve();
+  private spiConfig: Partial<SPIConfig> | undefined;
 
   /**
    * Serialize DLL calls to prevent concurrent access
@@ -233,6 +236,9 @@ export class CH347WCH {
       throw new Error('Device not open');
     }
 
+    // Save config for later use (e.g., when spiSetFrequency needs to reinitialize)
+    this.spiConfig = config;
+
     // SPI config structure for WCH DLL (mSpiCfgS) - packed with #pragma pack(1)
     // struct {
     //   UCHAR iMode;                  // offset 0: SPI mode (0-3)
@@ -291,6 +297,42 @@ export class CH347WCH {
     if (result === 0) {
       throw new Error('Failed to initialize SPI');
     }
+  }
+
+  /**
+   * Set SPI clock frequency
+   *
+   * Supported frequencies (nearest value is automatically selected):
+   * 60 MHz, 48 MHz, 36 MHz, 30 MHz, 28 MHz, 24 MHz, 18 MHz, 15 MHz, 14 MHz,
+   * 12 MHz, 9 MHz, 7.5 MHz, 7 MHz, 6 MHz, 4.5 MHz, 3.75 MHz, 3.5 MHz, 3 MHz,
+   * 2.25 MHz, 1.875 MHz, 1.75 MHz, 1.5 MHz, 1.125 MHz, 937.5 KHz, 875 KHz,
+   * 750 KHz, 562.5 KHz, 468.75 KHz, 437.5 KHz, 375 KHz, 281.25 KHz, 218.75 KHz
+   *
+   * This method automatically calls spiInit() after setting the frequency
+   * as required by the CH347 DLL, using the previously saved SPI configuration.
+   *
+   * @param frequencyHz - Desired SPI clock frequency in Hz
+   * @throws Error if device is not open or operation fails
+   */
+  async spiSetFrequency(frequencyHz: number): Promise<void> {
+    if (!this.isOpen) {
+      throw new Error('Device not open');
+    }
+
+    const result = await this.serialize(() =>
+      callAsync<number>(
+        wchLib!.CH347SPI_SetFrequency,
+        this.deviceIndex,
+        frequencyHz
+      )
+    );
+
+    if (result === 0) {
+      throw new Error(`Failed to set SPI frequency to ${frequencyHz} Hz`);
+    }
+
+    // Per CH347 documentation: must call CH347SPI_Init after setting frequency
+    await this.spiInit(this.spiConfig);
   }
 
   /**
