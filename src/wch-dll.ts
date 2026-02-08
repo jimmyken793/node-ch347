@@ -26,7 +26,7 @@ let koffi: any = null;
  * Converts callback-style async to Promise
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function callAsync<T>(fn: any, ...args: any[]): Promise<T> {
+export function callAsync<T>(fn: any, ...args: any[]): Promise<T> {
   return new Promise((resolve, reject) => {
     fn.async(...args, (err: Error | null, result: T) => {
       if (err) reject(err);
@@ -39,6 +39,7 @@ function callAsync<T>(fn: any, ...args: any[]): Promise<T> {
 interface WCHFunctions {
   CH347OpenDevice: (deviceIndex: number) => number;
   CH347CloseDevice: (deviceIndex: number) => void;
+  CH347GetDeviceInfor: (deviceIndex: number, deviceInfo: Buffer | Uint8Array) => number;
   CH347SPI_Init: (deviceIndex: number, spiCfg: Buffer | Uint8Array) => number;
   CH347SPI_SetChipSelect: (
     deviceIndex: number,
@@ -111,6 +112,7 @@ export function loadWCHDLL(): boolean {
       wchLib = {
         CH347OpenDevice: lib.func('int CH347OpenDevice(int)'),
         CH347CloseDevice: lib.func('void CH347CloseDevice(int)'),
+        CH347GetDeviceInfor: lib.func('int CH347GetDeviceInfor(int, void*)'),
         CH347SPI_Init: lib.func('int CH347SPI_Init(int, void*)'),
         CH347SPI_SetChipSelect: lib.func('int CH347SPI_SetChipSelect(int, int, int, int, int)'),
         CH347SPI_Write: lib.func('int CH347SPI_Write(int, int, int, int, void*)'),
@@ -151,6 +153,13 @@ export function isWCHDLLAvailable(): boolean {
 }
 
 /**
+ * Get WCH DLL functions
+ */
+export function getWCHFunctions(): WCHFunctions | null {
+  return wchLib;
+}
+
+/**
  * WCH DLL-based CH347 USB implementation
  */
 export class CH347WCH {
@@ -185,7 +194,8 @@ export class CH347WCH {
     const devices: number[] = [];
     for (let i = 0; i < 16; i++) {
       const handle = await callAsync<number>(wchLib!.CH347OpenDevice, i);
-      if (handle !== -1) {
+      // CH347OpenDevice returns 0 on failure, non-zero handle on success
+      if (handle !== 0 && handle !== -1) {
         devices.push(i);
         await callAsync<void>(wchLib!.CH347CloseDevice, i);
       }
@@ -202,8 +212,10 @@ export class CH347WCH {
     }
 
     const handle = await callAsync<number>(wchLib!.CH347OpenDevice, deviceIndex);
-    if (handle === -1) {
-      throw new Error(`Failed to open CH347 device ${deviceIndex}`);
+
+    // CH347OpenDevice returns 0 on failure, non-zero handle on success
+    if (handle === 0 || handle === -1) {
+      throw new Error(`Failed to open CH347 device ${deviceIndex} (handle=${handle})`);
     }
 
     this.deviceIndex = deviceIndex;
@@ -294,8 +306,9 @@ export class CH347WCH {
     const result = await this.serialize(() =>
       callAsync<number>(wchLib!.CH347SPI_Init, this.deviceIndex, cfgBuffer)
     );
+
     if (result === 0) {
-      throw new Error('Failed to initialize SPI');
+      throw new Error(`Failed to initialize SPI (device=${this.deviceIndex}, result=${result})`);
     }
   }
 
@@ -336,7 +349,19 @@ export class CH347WCH {
   }
 
   /**
-   * SPI write and read
+   * SPI full-duplex transfer - uses CH347SPI_WriteRead (0xC2 command)
+   *
+   * This sends data on MOSI while simultaneously receiving on MISO.
+   * The buffer is both input (TX) and output (RX).
+   *
+   * USB sequence:
+   *   USB OUT: [0xC1] CS Assert
+   *   USB OUT: [0xC2][len_lo][len_hi][tx_data...]
+   *   USB IN:  [0xC2][len_lo][len_hi][rx_data...]
+   *   USB OUT: [0xC1] CS Deassert
+   *
+   * Use this for true full-duplex operations where you need simultaneous TX/RX.
+   * For write-then-read patterns (like flash commands), use sendCommand() instead.
    */
   async spiTransfer(writeData: Buffer): Promise<Buffer> {
     if (!this.isOpen) {
@@ -373,7 +398,15 @@ export class CH347WCH {
   }
 
   /**
-   * SPI write only (uses CH347SPI_WriteRead internally)
+   * SPI write only - uses CH347SPI_Write (0xC4 command)
+   *
+   * This matches the libusb sequence:
+   *   USB OUT: [0xC1] CS Assert
+   *   USB OUT: [0xC4][len_lo][len_hi][data...]
+   *   USB IN:  [0xC4][...] ack
+   *   USB OUT: [0xC1] CS Deassert
+   *
+   * CH347SPI_Write with csControl=0x80 handles CS automatically.
    */
   async spiWrite(data: Buffer): Promise<void> {
     if (!this.isOpen) {
@@ -389,12 +422,17 @@ export class CH347WCH {
       console.log(`[WCH] spiWrite: deviceIndex=${this.deviceIndex}, len=${data.length}, data=${data.subarray(0, Math.min(8, data.length)).toString('hex')}...`);
     }
 
+    // Use CH347SPI_Write
+    // Parameters: deviceIndex, csControl, cmdLength, dataLength, buffer
+    // cmdLength = chunk size for writing (pass data.length for single chunk)
+    // dataLength = total bytes to write
     const result = await this.serialize(() =>
       callAsync<number>(
-        wchLib!.CH347SPI_WriteRead,
+        wchLib!.CH347SPI_Write,
         this.deviceIndex,
-        0x80, // CS0 active (bit 7 set)
-        data.length, // Actual data length to write
+        0x80,        // CS0 active (bit 7 set) - DLL handles CS assert/deassert
+        data.length, // cmdLength: chunk size (use full buffer as one chunk)
+        data.length, // dataLength: total bytes to write
         buffer
       )
     );
@@ -438,12 +476,17 @@ export class CH347WCH {
   }
 
   /**
-   * SPI read with command (for flash read operations)
-   * This matches the official WCH implementation pattern from SPI_Flash.cpp
+   * SPI read with command - uses CH347SPI_Read (0xC4 + 0xC3 internally)
    *
-   * Reference from WCH code:
-   *   ULONG iLen = len;
-   *   if (!CH347SPI_Read(DevIndex, 0x80, 4, &iLen, DBuf))
+   * This matches the libusb sendCommand() sequence for read operations:
+   *   USB OUT: [0xC1] CS Assert
+   *   USB OUT: [0xC4][cmd_len][0x00][command...]  (write command bytes)
+   *   USB IN:  [0xC4][...] ack
+   *   USB OUT: [0xC3][0x04][0x00][read_len as u32]  (request read)
+   *   USB IN:  [0xC3][len_lo][len_hi][data...]
+   *   USB OUT: [0xC1] CS Deassert
+   *
+   * CH347SPI_Read combines the write-command and read-data phases in one CS assertion.
    *
    * @param command Command buffer (e.g., [0x03, addr_high, addr_mid, addr_low])
    * @param readLength Number of bytes to read after the command
@@ -473,16 +516,16 @@ export class CH347WCH {
     // Call CH347SPI_Read:
     // - iIndex: device index
     // - iChipSelect: 0x80 (CS0 active, bit 7=1)
-    // - oLength: command length (number of bytes to send)
-    // - iLength: pointer to read length (input: bytes to read, output: bytes actually read)
-    // - ioBuffer: contains command, receives data
+    // - oLength: command length (number of bytes to send first via 0xC4)
+    // - iLength: pointer to read length (bytes to read via 0xC3)
+    // - ioBuffer: contains command at start, receives data
     const result = await this.serialize(() =>
       callAsync<number>(
         wchLib!.CH347SPI_Read,
         this.deviceIndex,
-        0x80, // CS0 active
-        command.length, // Command length (e.g., 4 for read command + 3-byte address)
-        readLengthPtr, // Pointer to read length (passed by reference)
+        0x80, // CS0 active - DLL handles CS assert/deassert
+        command.length, // Command length to write first
+        readLengthPtr, // Pointer to read length
         ioBuffer
       )
     );
@@ -501,9 +544,57 @@ export class CH347WCH {
       console.warn(`Warning: Requested ${readLength} bytes, but read ${actualReadLen} bytes`);
     }
 
-    // According to WCH code: memcpy(pbuf, DBuf, len);
-    // The ioBuffer contains the data starting from the beginning
+    // The ioBuffer contains the read data starting from the beginning
     return ioBuffer.subarray(0, actualReadLen);
+  }
+
+  /**
+   * Send SPI command with optional read - uses CH347SPI_WriteRead (0xC2 full-duplex)
+   *
+   * Always uses CH347SPI_WriteRead for both write-only and write-then-read operations.
+   * CH347SPI_Write (0xC4) is unreliable under sustained heavy write load, causing
+   * sporadic data corruption in page writes.
+   *
+   * For write-then-read:
+   *   We send: [cmd bytes][dummy bytes for clocking]
+   *   We recv: [garbage during cmd][actual read data]
+   *
+   * @param writeData Command/data to write
+   * @param readLength Number of bytes to read (0 for write-only)
+   * @returns Read data (empty buffer if readLength is 0)
+   */
+  async sendCommand(writeData: Buffer, readLength = 0): Promise<Buffer> {
+    if (!this.isOpen) {
+      throw new Error('Device not open');
+    }
+
+    // Always use CH347SPI_WriteRead (0xC2 full-duplex) for all operations.
+    // CH347SPI_Write (0xC4) is unreliable under sustained heavy write load,
+    // causing sporadic data corruption in page writes.
+    const totalLen = writeData.length + readLength;
+    const ioBuffer = Buffer.alloc(totalLen);
+    writeData.copy(ioBuffer); // Command at start, rest is 0x00 (dummy for clocking)
+
+    const result = await this.serialize(() =>
+      callAsync<number>(
+        wchLib!.CH347SPI_WriteRead,
+        this.deviceIndex,
+        0x80, // CS0 active - DLL handles CS
+        totalLen,
+        ioBuffer
+      )
+    );
+
+    if (result === 0) {
+      throw new Error(`SPI WriteRead failed (cmd=0x${writeData[0]?.toString(16)})`);
+    }
+
+    if (readLength === 0) {
+      return Buffer.alloc(0);
+    }
+
+    // Read data comes after the command bytes (those clocks received garbage)
+    return ioBuffer.subarray(writeData.length, writeData.length + readLength);
   }
 
   /**

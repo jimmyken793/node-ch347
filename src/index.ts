@@ -171,6 +171,24 @@ export class CH347Device {
    */
   async close(): Promise<void> {
     if (this.backend) {
+      // Try to cleanup flash state before closing
+      // This prevents leaving the flash in write-enable mode or with pending operations
+      if (this._flash) {
+        try {
+          // Wait for any pending flash operations to complete
+          await this._flash.waitReady(1000);
+        } catch {
+          // Ignore timeout - flash might not be responding
+        }
+
+        try {
+          // Disable write to clear WEL bit
+          await this._flash.writeDisable();
+        } catch {
+          // Ignore errors - device might already be in bad state
+        }
+      }
+
       await this.backend.close();
       this.backend = null;
     }

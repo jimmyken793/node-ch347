@@ -536,7 +536,31 @@ export class CH347Flash {
       }
     });
 
-    return data.equals(readData);
+    if (!data.equals(readData)) {
+      // Find and report first mismatches
+      let mismatchCount = 0;
+      let firstMismatch = -1;
+      for (let i = 0; i < data.length; i++) {
+        if (data[i] !== readData[i]) {
+          if (mismatchCount < 10) {
+            console.log(`  Verify mismatch at 0x${(address + i).toString(16).padStart(6, '0')}: expected 0x${data[i].toString(16).padStart(2, '0')}, got 0x${readData[i].toString(16).padStart(2, '0')}`);
+          }
+          if (firstMismatch === -1) firstMismatch = i;
+          mismatchCount++;
+        }
+      }
+      console.log(`  Total mismatches: ${mismatchCount} / ${data.length} bytes (first at offset 0x${firstMismatch.toString(16)})`);
+
+      // Check if readData is all 0xFF (not written) or old data
+      const allFF = readData.subarray(firstMismatch, Math.min(firstMismatch + 16, data.length)).every(b => b === 0xFF);
+      if (allFF) {
+        console.log('  Flash appears to be erased (0xFF) - writes may not have taken effect');
+      }
+
+      return false;
+    }
+
+    return true;
   }
 
   /**

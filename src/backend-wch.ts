@@ -129,84 +129,81 @@ export class WCHBackend implements CH347Backend {
     return result.subarray(0, len);
   }
 
+  /**
+   * Send SPI command - matches libusb sendCommand() behavior
+   *
+   * Uses the same USB command sequence as the libusb backend:
+   * - Write-only (readLength=0): 0xC1 assert → 0xC4 write → 0xC1 deassert
+   * - Write-then-read: 0xC1 assert → 0xC4 write → 0xC3 read → 0xC1 deassert
+   *
+   * This is implemented via:
+   * - CH347SPI_Write for write-only operations
+   * - CH347SPI_Read for write-then-read operations
+   */
   async spiSendCommand(writeData: Buffer, readLength = 0): Promise<Buffer> {
     if (!this.wch) {
       throw new Error('Device not open');
     }
 
-    // All SPI operations use CH347SPI_WriteRead internally
+    // For large reads, chunk the operation so each sub-read fits within
+    // a single DLL internal USB packet. The DLL's CH347SPI_WriteRead chunks
+    // at ~507 bytes (CH347_MAX_DATA_LEN) and toggles CS between chunks.
+    // If cmd + readLen exceeds this limit, CS gets deasserted mid-read,
+    // corrupting the last bytes of each chunk.
+    // Fix: max readLen per sub-read = CH347_MAX_DATA_LEN - cmdLen
+    const maxReadPerChunk = CH347_MAX_DATA_LEN - writeData.length;
 
-    if (readLength === 0 && writeData.length > 4) {
-      // Page program operation
-      await this.wch.spiWrite(writeData);
-      return Buffer.alloc(0);
-    }
+    if (writeData.length >= 1 && readLength > maxReadPerChunk) {
+      const cmd = writeData[0];
+      const address = writeData.length >= 4
+        ? (writeData[1] << 16) | (writeData[2] << 8) | writeData[3]
+        : 0;
 
-    // For large reads, chunk using CH347SPI_WriteRead (proven working method)
-    // TODO: Investigate CH347SPI_Read for potential performance improvements
-    if (writeData.length + readLength > CH347_MAX_DATA_LEN) {
-      // Large read operation - chunk the read portion
-      // This happens for data reads (cmd=0x03 or similar with 24-bit address)
-      if (writeData.length === 4 && readLength > 0) {
-        // Extract command and address
-        const cmd = writeData[0];
-        const address = (writeData[1] << 16) | (writeData[2] << 8) | writeData[3];
+      const result = Buffer.alloc(readLength);
+      let offset = 0;
 
-        // Chunk the read operation to stay within USB packet size
-        const maxChunk = CH347_MAX_DATA_LEN - 4; // Leave room for command
-        const result = Buffer.alloc(readLength);
-        let offset = 0;
+      while (offset < readLength) {
+        const chunkLen = Math.min(maxReadPerChunk, readLength - offset);
+        const chunkAddr = address + offset;
 
-        while (offset < readLength) {
-          const chunkLen = Math.min(maxChunk, readLength - offset);
-          const chunkAddr = address + offset;
-
-          // Build command for this chunk
-          const chunkCmd = Buffer.alloc(4);
-          chunkCmd[0] = cmd;
+        // Build command for this chunk
+        const chunkCmd = Buffer.alloc(writeData.length);
+        chunkCmd[0] = cmd;
+        if (writeData.length >= 4) {
           chunkCmd[1] = (chunkAddr >> 16) & 0xff;
           chunkCmd[2] = (chunkAddr >> 8) & 0xff;
           chunkCmd[3] = chunkAddr & 0xff;
-
-          // Read this chunk using CH347SPI_WriteRead
-          const chunkBuffer = Buffer.alloc(4 + chunkLen);
-          chunkCmd.copy(chunkBuffer);
-          const chunkResult = await this.wch.spiTransfer(chunkBuffer);
-          chunkResult.subarray(4).copy(result, offset);
-
-          offset += chunkLen;
         }
 
-        return result;
+        const chunkResult = await this.wch.sendCommand(chunkCmd, chunkLen);
+        chunkResult.copy(result, offset);
+
+        offset += chunkLen;
       }
 
-      throw new Error(`Transfer too large for single operation: write=${writeData.length}, read=${readLength}`);
+      return result;
     }
 
-    // All other commands use CH347SPI_WriteRead:
-    // - Commands with response (JEDEC ID, status read, small data reads)
-    // - Short write-only commands (WREN, WRDI, erase commands ≤ 4 bytes)
-    const buffer = Buffer.alloc(writeData.length + readLength);
-    writeData.copy(buffer);
-
-    const result = await this.wch.spiTransfer(buffer);
-    return result.subarray(writeData.length);
+    // Use the new sendCommand method which matches libusb behavior:
+    // - readLength=0: uses CH347SPI_Write (sends 0xC4 command)
+    // - readLength>0: uses CH347SPI_Read (sends 0xC4 then 0xC3)
+    return await this.wch.sendCommand(writeData, readLength);
   }
 
+  /**
+   * Bulk read from SPI flash - matches libusb spiBulkRead() behavior
+   *
+   * Uses CH347SPI_Read which sends the same USB sequence as libusb:
+   *   0xC1 assert → 0xC4 write cmd → 0xC3 read data → 0xC1 deassert
+   */
   async spiBulkRead(address: number, length: number, readCmd = 0x03): Promise<Buffer> {
     if (!this.wch) {
       throw new Error('Device not open');
     }
 
-    // Build read command: cmd + 24-bit address
-    const cmd = Buffer.alloc(4);
-    cmd[0] = readCmd;
-    cmd[1] = (address >> 16) & 0xff;
-    cmd[2] = (address >> 8) & 0xff;
-    cmd[3] = address & 0xff;
-
-    // For large reads, we need to chunk (consistent with LibUSBBackend)
-    const maxChunk = CH347_MAX_DATA_LEN;
+    // Chunk reads so cmd + data fits in one DLL internal USB packet.
+    // DLL toggles CS between internal chunks, so total must be <= CH347_MAX_DATA_LEN.
+    const maxChunk = CH347_MAX_DATA_LEN - 4; // 4 bytes for cmd + 24-bit address
     const result = Buffer.alloc(length);
     let offset = 0;
 
@@ -214,13 +211,14 @@ export class WCHBackend implements CH347Backend {
       const chunkLen = Math.min(maxChunk, length - offset);
       const chunkAddr = address + offset;
 
+      // Build read command: cmd + 24-bit address
       const chunkCmd = Buffer.alloc(4);
       chunkCmd[0] = readCmd;
       chunkCmd[1] = (chunkAddr >> 16) & 0xff;
       chunkCmd[2] = (chunkAddr >> 8) & 0xff;
       chunkCmd[3] = chunkAddr & 0xff;
 
-      const chunkData = await this.spiSendCommand(chunkCmd, chunkLen);
+      const chunkData = await this.wch.sendCommand(chunkCmd, chunkLen);
       chunkData.copy(result, offset);
       offset += chunkLen;
     }
