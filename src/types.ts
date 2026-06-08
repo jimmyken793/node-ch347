@@ -122,6 +122,7 @@ export const FlashManufacturers: Record<number, string> = {
   0x68: 'Boya',
   0x85: 'Puya',
   0x5e: 'Zbit',
+  0x62: 'Sanyo/SST',
 };
 
 // Common flash chips database
@@ -145,4 +146,19 @@ export const FlashDatabase: Record<number, { name: string; size: number }> = {
   0xc22016: { name: 'MX25L3205', size: 4 * 1024 * 1024 },
   0xc22017: { name: 'MX25L6405', size: 8 * 1024 * 1024 },
   0xc22018: { name: 'MX25L12805', size: 16 * 1024 * 1024 },
+  // SST / Microchip
+  0xbf2501: { name: 'SST25WF512', size: 64 * 1024 },
+  0xbf2502: { name: 'SST25WF010', size: 128 * 1024 },
+  0xbf2503: { name: 'SST25WF020', size: 256 * 1024 },
+  0xbf2504: { name: 'SST25WF040', size: 512 * 1024 },
+  0xbf2505: { name: 'SST25WF080', size: 1024 * 1024 },
+  0xbf2541: { name: 'SST25VF016B', size: 2 * 1024 * 1024 },
+  0xbf254a: { name: 'SST25VF032B', size: 4 * 1024 * 1024 },
+  0xbf254b: { name: 'SST25VF064C', size: 8 * 1024 * 1024 },
+  0xbf258c: { name: 'SST25VF020B', size: 256 * 1024 },
+  0xbf258d: { name: 'SST25VF040B', size: 512 * 1024 },
+  0xbf258e: { name: 'SST25VF080B', size: 1024 * 1024 },
+  0x621612: { name: 'SST25WF020A', size: 256 * 1024 },
+  0x621613: { name: 'SST25WF040B', size: 512 * 1024 },
+  0x621614: { name: 'SST25WF080B', size: 1024 * 1024 },
 };

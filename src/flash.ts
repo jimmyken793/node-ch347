@@ -10,10 +10,15 @@ import {
   FLASH_CMD_WRITE_DISABLE,
   FLASH_CMD_READ_STATUS,
   FLASH_CMD_READ_DATA,
+  FLASH_CMD_READ_DATA_4BYTE,
   FLASH_CMD_PAGE_PROGRAM,
+  FLASH_CMD_PAGE_PROGRAM_4BYTE,
   FLASH_CMD_SECTOR_ERASE,
+  FLASH_CMD_SECTOR_ERASE_4BYTE,
   FLASH_CMD_BLOCK_ERASE_32K,
+  FLASH_CMD_BLOCK_ERASE_32K_4BYTE,
   FLASH_CMD_BLOCK_ERASE_64K,
+  FLASH_CMD_BLOCK_ERASE_64K_4BYTE,
   FLASH_CMD_CHIP_ERASE,
   FLASH_CMD_READ_JEDEC_ID,
   FLASH_CMD_READ_SFDP,
@@ -36,6 +41,64 @@ import { on } from 'events';
 
 const DEFAULT_TIMEOUT_MS = 30000; // 30 seconds for chip erase
 const POLL_INTERVAL_MS = 1; // 1ms polling
+const MAX_24BIT_ADDRESS = 0x1000000;
+const MIN_STANDARD_CAPACITY_CODE = 0x10; // 64 KiB
+const MAX_STANDARD_CAPACITY_CODE = 0x20; // 4 GiB
+
+function calculateFlashSize(capacity: number): number {
+  if (capacity >= MIN_STANDARD_CAPACITY_CODE && capacity <= MAX_STANDARD_CAPACITY_CODE) {
+    return 2 ** capacity;
+  }
+
+  return 0;
+}
+
+function powerOfTwoSize(sizeCode: number): number {
+  if (sizeCode < 0 || sizeCode > MAX_STANDARD_CAPACITY_CODE) {
+    return 0;
+  }
+
+  return 2 ** sizeCode;
+}
+
+function uses4ByteAddress(address: number, length = 1): boolean {
+  return address + length > MAX_24BIT_ADDRESS;
+}
+
+function alignDown(address: number, size: number): number {
+  return Math.floor(address / size) * size;
+}
+
+function buildAddressCommand(command: number, address: number, use4ByteAddress: boolean): Buffer {
+  const cmd = Buffer.alloc(use4ByteAddress ? 5 : 4);
+  cmd[0] = command;
+
+  if (use4ByteAddress) {
+    cmd[1] = Math.floor(address / 0x1000000) & 0xff;
+    cmd[2] = (address >> 16) & 0xff;
+    cmd[3] = (address >> 8) & 0xff;
+    cmd[4] = address & 0xff;
+  } else {
+    cmd[1] = (address >> 16) & 0xff;
+    cmd[2] = (address >> 8) & 0xff;
+    cmd[3] = address & 0xff;
+  }
+
+  return cmd;
+}
+
+function get4ByteEraseCommand(command: number): number | null {
+  switch (command) {
+    case FLASH_CMD_SECTOR_ERASE:
+      return FLASH_CMD_SECTOR_ERASE_4BYTE;
+    case FLASH_CMD_BLOCK_ERASE_32K:
+      return FLASH_CMD_BLOCK_ERASE_32K_4BYTE;
+    case FLASH_CMD_BLOCK_ERASE_64K:
+      return FLASH_CMD_BLOCK_ERASE_64K_4BYTE;
+    default:
+      return null;
+  }
+}
 
 export class CH347Flash {
   private spi: SPIInterface;
@@ -43,6 +106,32 @@ export class CH347Flash {
 
   constructor(spi: SPIInterface) {
     this.spi = spi;
+  }
+
+  private validateRange(address: number, length: number, operation: string): void {
+    if (!Number.isSafeInteger(address) || address < 0) {
+      throw new Error(`${operation} address must be a non-negative safe integer`);
+    }
+
+    if (!Number.isSafeInteger(length) || length < 0) {
+      throw new Error(`${operation} length must be a non-negative safe integer`);
+    }
+
+    if (length === 0) {
+      return;
+    }
+
+    const endAddress = address + length;
+    if (!Number.isSafeInteger(endAddress) || endAddress < address) {
+      throw new Error(`${operation} range overflows JavaScript safe integer limits`);
+    }
+
+    if (this.flashInfo?.size && endAddress > this.flashInfo.size) {
+      throw new Error(
+        `${operation} range 0x${address.toString(16)}..0x${(endAddress - 1).toString(16)} ` +
+        `exceeds flash size (${this.flashInfo.size} bytes)`
+      );
+    }
   }
 
   /**
@@ -68,7 +157,7 @@ export class CH347Flash {
       name = dbEntry.name;
     } else {
       // Calculate size from capacity byte (2^capacity bytes)
-      size = capacity > 0 ? 1 << capacity : 0;
+      size = calculateFlashSize(capacity);
     }
 
     const manufacturerName = FlashManufacturers[manufacturerId];
@@ -157,12 +246,14 @@ export class CH347Flash {
         const command = bfpt[offset + 1];
 
         if (sizeCode > 0 && command > 0) {
-          const size = 1 << sizeCode;
-          eraseTypes.push({
-            command,
-            size,
-            timeoutMs: this.estimateEraseTimeout(size),
-          });
+          const size = powerOfTwoSize(sizeCode);
+          if (size > 0) {
+            eraseTypes.push({
+              command,
+              size,
+              timeoutMs: this.estimateEraseTimeout(size),
+            });
+          }
         }
       }
 
@@ -171,7 +262,7 @@ export class CH347Flash {
       if (bfpt.length > 40) {
         const pageSizeCode = (bfpt[40] >> 4) & 0x0f;
         if (pageSizeCode > 0) {
-          pageSize = 1 << pageSizeCode;
+          pageSize = 2 ** pageSizeCode;
         }
       }
 
@@ -242,6 +333,8 @@ export class CH347Flash {
     length: number,
     onProgress?: FlashProgressCallback
   ): Promise<Buffer> {
+    this.validateRange(address, length, 'Read');
+
     const result = Buffer.alloc(length);
     const chunkSize = 4096; // Read in 4KB chunks for progress reporting
     let offset = 0;
@@ -250,13 +343,12 @@ export class CH347Flash {
       const readLen = Math.min(chunkSize, length - offset);
       const addr = address + offset;
 
-      // Build read command: 0x03 + 24-bit address
-      const cmd = Buffer.from([
-        FLASH_CMD_READ_DATA,
-        (addr >> 16) & 0xff,
-        (addr >> 8) & 0xff,
-        addr & 0xff,
-      ]);
+      const use4ByteAddress = uses4ByteAddress(addr, readLen);
+      const cmd = buildAddressCommand(
+        use4ByteAddress ? FLASH_CMD_READ_DATA_4BYTE : FLASH_CMD_READ_DATA,
+        addr,
+        use4ByteAddress
+      );
 
       const response = await this.spi.sendCommand(cmd, readLen);
       response.copy(result, offset);
@@ -286,13 +378,15 @@ export class CH347Flash {
 
     await this.writeEnable();
 
-    // Build page program command
-    const cmd = Buffer.alloc(4 + data.length);
-    cmd[0] = FLASH_CMD_PAGE_PROGRAM;
-    cmd[1] = (address >> 16) & 0xff;
-    cmd[2] = (address >> 8) & 0xff;
-    cmd[3] = address & 0xff;
-    data.copy(cmd, 4);
+    const use4ByteAddress = uses4ByteAddress(address, data.length);
+    const commandHeader = buildAddressCommand(
+      use4ByteAddress ? FLASH_CMD_PAGE_PROGRAM_4BYTE : FLASH_CMD_PAGE_PROGRAM,
+      address,
+      use4ByteAddress
+    );
+    const cmd = Buffer.alloc(commandHeader.length + data.length);
+    commandHeader.copy(cmd);
+    data.copy(cmd, commandHeader.length);
 
     await this.spi.command(cmd);
     await this.waitReady(1000); // Page program timeout 1 second
@@ -306,6 +400,8 @@ export class CH347Flash {
     data: Buffer,
     onProgress?: FlashProgressCallback
   ): Promise<void> {
+    this.validateRange(address, data.length, 'Write');
+
     let offset = 0;
 
     while (offset < data.length) {
@@ -336,16 +432,17 @@ export class CH347Flash {
    */
   async eraseSector(address: number): Promise<void> {
     // Align to sector boundary
-    const sectorAddress = address & ~(FLASH_SECTOR_SIZE - 1);
+    const sectorAddress = alignDown(address, FLASH_SECTOR_SIZE);
+    this.validateRange(sectorAddress, FLASH_SECTOR_SIZE, 'Sector erase');
 
     await this.writeEnable();
 
-    const cmd = Buffer.from([
-      FLASH_CMD_SECTOR_ERASE,
-      (sectorAddress >> 16) & 0xff,
-      (sectorAddress >> 8) & 0xff,
-      sectorAddress & 0xff,
-    ]);
+    const use4ByteAddress = uses4ByteAddress(sectorAddress, FLASH_SECTOR_SIZE);
+    const cmd = buildAddressCommand(
+      use4ByteAddress ? FLASH_CMD_SECTOR_ERASE_4BYTE : FLASH_CMD_SECTOR_ERASE,
+      sectorAddress,
+      use4ByteAddress
+    );
 
     await this.spi.command(cmd);
     await this.waitReady(3000); // Sector erase timeout 3 seconds
@@ -355,16 +452,17 @@ export class CH347Flash {
    * Erase a 32KB block
    */
   async eraseBlock32K(address: number): Promise<void> {
-    const blockAddress = address & ~(FLASH_BLOCK_SIZE_32K - 1);
+    const blockAddress = alignDown(address, FLASH_BLOCK_SIZE_32K);
+    this.validateRange(blockAddress, FLASH_BLOCK_SIZE_32K, '32KB block erase');
 
     await this.writeEnable();
 
-    const cmd = Buffer.from([
-      FLASH_CMD_BLOCK_ERASE_32K,
-      (blockAddress >> 16) & 0xff,
-      (blockAddress >> 8) & 0xff,
-      blockAddress & 0xff,
-    ]);
+    const use4ByteAddress = uses4ByteAddress(blockAddress, FLASH_BLOCK_SIZE_32K);
+    const cmd = buildAddressCommand(
+      use4ByteAddress ? FLASH_CMD_BLOCK_ERASE_32K_4BYTE : FLASH_CMD_BLOCK_ERASE_32K,
+      blockAddress,
+      use4ByteAddress
+    );
 
     await this.spi.command(cmd);
     await this.waitReady(5000); // Block erase timeout 5 seconds
@@ -374,16 +472,17 @@ export class CH347Flash {
    * Erase a 64KB block
    */
   async eraseBlock64K(address: number): Promise<void> {
-    const blockAddress = address & ~(FLASH_BLOCK_SIZE_64K - 1);
+    const blockAddress = alignDown(address, FLASH_BLOCK_SIZE_64K);
+    this.validateRange(blockAddress, FLASH_BLOCK_SIZE_64K, '64KB block erase');
 
     await this.writeEnable();
 
-    const cmd = Buffer.from([
-      FLASH_CMD_BLOCK_ERASE_64K,
-      (blockAddress >> 16) & 0xff,
-      (blockAddress >> 8) & 0xff,
-      blockAddress & 0xff,
-    ]);
+    const use4ByteAddress = uses4ByteAddress(blockAddress, FLASH_BLOCK_SIZE_64K);
+    const cmd = buildAddressCommand(
+      use4ByteAddress ? FLASH_CMD_BLOCK_ERASE_64K_4BYTE : FLASH_CMD_BLOCK_ERASE_64K,
+      blockAddress,
+      use4ByteAddress
+    );
 
     await this.spi.command(cmd);
     await this.waitReady(5000); // Block erase timeout 5 seconds
@@ -440,16 +539,17 @@ export class CH347Flash {
    */
   private async eraseWithType(address: number, eraseType: EraseType): Promise<void> {
     // Align to erase boundary
-    const alignedAddress = address & ~(eraseType.size - 1);
+    const alignedAddress = alignDown(address, eraseType.size);
+    this.validateRange(alignedAddress, eraseType.size, 'Erase');
 
     await this.writeEnable();
 
-    const cmd = Buffer.from([
-      eraseType.command,
-      (alignedAddress >> 16) & 0xff,
-      (alignedAddress >> 8) & 0xff,
-      alignedAddress & 0xff,
-    ]);
+    const use4ByteAddress = uses4ByteAddress(alignedAddress, eraseType.size);
+    const eraseCommand = use4ByteAddress ? get4ByteEraseCommand(eraseType.command) : eraseType.command;
+    if (eraseCommand === null) {
+      throw new Error(`Erase command 0x${eraseType.command.toString(16)} does not support 4-byte addressing`);
+    }
+    const cmd = buildAddressCommand(eraseCommand, alignedAddress, use4ByteAddress);
 
     await this.spi.command(cmd);
     await this.waitReady(eraseType.timeoutMs);
@@ -474,6 +574,8 @@ export class CH347Flash {
     length: number,
     onProgress?: FlashProgressCallback
   ): Promise<void> {
+    this.validateRange(address, length, 'Erase');
+
     const endAddress = address + length;
     let currentAddress = address;
     let erased = 0;
@@ -536,31 +638,7 @@ export class CH347Flash {
       }
     });
 
-    if (!data.equals(readData)) {
-      // Find and report first mismatches
-      let mismatchCount = 0;
-      let firstMismatch = -1;
-      for (let i = 0; i < data.length; i++) {
-        if (data[i] !== readData[i]) {
-          if (mismatchCount < 10) {
-            console.log(`  Verify mismatch at 0x${(address + i).toString(16).padStart(6, '0')}: expected 0x${data[i].toString(16).padStart(2, '0')}, got 0x${readData[i].toString(16).padStart(2, '0')}`);
-          }
-          if (firstMismatch === -1) firstMismatch = i;
-          mismatchCount++;
-        }
-      }
-      console.log(`  Total mismatches: ${mismatchCount} / ${data.length} bytes (first at offset 0x${firstMismatch.toString(16)})`);
-
-      // Check if readData is all 0xFF (not written) or old data
-      const allFF = readData.subarray(firstMismatch, Math.min(firstMismatch + 16, data.length)).every(b => b === 0xFF);
-      if (allFF) {
-        console.log('  Flash appears to be erased (0xFF) - writes may not have taken effect');
-      }
-
-      return false;
-    }
-
-    return true;
+    return data.equals(readData);
   }
 
   /**

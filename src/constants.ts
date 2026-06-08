@@ -134,10 +134,15 @@ export const FLASH_CMD_READ_STATUS = 0x05;
 export const FLASH_CMD_WRITE_STATUS = 0x01;
 export const FLASH_CMD_READ_DATA = 0x03;
 export const FLASH_CMD_FAST_READ = 0x0b;
+export const FLASH_CMD_READ_DATA_4BYTE = 0x13;
 export const FLASH_CMD_PAGE_PROGRAM = 0x02;
+export const FLASH_CMD_PAGE_PROGRAM_4BYTE = 0x12;
 export const FLASH_CMD_SECTOR_ERASE = 0x20;    // 4KB
+export const FLASH_CMD_SECTOR_ERASE_4BYTE = 0x21; // 4KB, 4-byte address
 export const FLASH_CMD_BLOCK_ERASE_32K = 0x52; // 32KB
+export const FLASH_CMD_BLOCK_ERASE_32K_4BYTE = 0x5c; // 32KB, 4-byte address
 export const FLASH_CMD_BLOCK_ERASE_64K = 0xd8; // 64KB
+export const FLASH_CMD_BLOCK_ERASE_64K_4BYTE = 0xdc; // 64KB, 4-byte address
 export const FLASH_CMD_CHIP_ERASE = 0xc7;
 export const FLASH_CMD_READ_ID = 0x9f;
 export const FLASH_CMD_READ_JEDEC_ID = 0x9f;
@@ -171,4 +176,3 @@ export const DEFAULT_SPI_CONFIG = {
 export function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
-
